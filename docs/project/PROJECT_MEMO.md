@@ -3,7 +3,63 @@
 每次任务开始先读本文件；代码、配置、架构、硬件假设或验证状态变化后，结束前
 更新本文件。它用于防止跨任务遗忘，不替代源码和实车记录。
 
-## 当前任务（2026-09-07）
+## 当前任务（2026-09-13）
+
+- 用户继续报告 flash 失败：复现上一轮 Linux flash 的未实现保护。现已接入
+  Linux OpenOCD 0.12.0 后端（本机 xPack），`flash.backend` 选择后端，Linux 默认
+  openocd、Windows/macOS 默认 cubeprogrammer；configure 新增 `--backend`。
+  doctor 在 Linux 只读 sysfs，旧 V2 原始 USB 序列号规范化为 24 位十六进制，
+  唯一探针/明确序列号选择；重复序列号也拒绝。flash-plan 输出完整脚本，不连接设备。
+- OpenOCD 写入流程已实现：构建/检查 ELF → 独立副本及 SHA-256 → 同一连接核对
+  0x413/1024 KiB → 完整备份 1 MiB → 软件 reset halt → 写入/校验 → 按 run_after
+  决定 reset run。失败不继续运行，不改 Option Bytes；每次单独保存脚本、日志、
+  原 Flash 和 manifest。本机配置仍为 run_after=true，未擅改运行偏好。
+- 验证：33 项工具测试通过（含 Tcl 目标模拟，身份/备份/写入/校验失败不会运行），
+  just build、doctor、flash-plan 及 Python 语法检查通过。新脚本实机只读连接确认
+  约 3.33 V、ID 0x413、1024 KiB；日志在 `build/diagnostics/flash-20260913/`。
+  尚未实际写入：当前源码会替换板上另一版本的遥控/云台程序，需明确本次要替换的
+  固件版本。待写 ELF 位于 verified 的 inf-debug，FLASH/RAM 127040/47800 B。
+  未改冻结底层或应用，未新增 RTOS 调用。
+- `just build` 故障已复现：旧 firmware.py 只允许 Windows/macOS，本机 Linux ARM64
+  在编译前被拒绝；本机工具版本也不同于原固定版本。新增 Linux aarch64 构建配置：
+  CMake 4.4.3、Ninja 1.13.2、GCC 15.3.1、just 1.58.0，保持其他主机版本和严格检查。
+  CMake 编译器缓存检查改用主机对应版本，configure 生成 Linux 终端 PATH。
+- Linux 新构建隔离在 `build/verified/linux-aarch64-<路径标识>/`，保留板上匹配旧产物；
+  当时 Linux bootstrap/flash/flash-plan 尚不支持；后续 OpenOCD 接入见本节开头，
+  bootstrap 仍拒绝 Linux，避免下载 Mac 包。
+  本次只改工具/测试/文档，无底层、应用或硬件操作。外部 shell 若找不到 just，
+  可用 `python3 tools/firmware.py build`；本机 VS Code 已配置 just 所在目录。
+- 验证：24 项 Python 工具测试通过；`just build` 完整及重复构建通过，
+  `just build sentry_swerve` 完整构建通过，双车型 ELF/BIN/HEX/manifest 均已生成。
+  步兵 FLASH/RAM 127040/47800 B，哨兵 129408/47808 B；RTOS 符号仍未链接。
+  原板上匹配 BIN 的 SHA-256 保持不变，`git diff --check` 通过。
+- 用户随后要求检查轮子的遥控能否运行。保留既有四轮映射并再次核对板上镜像，
+  仍与下述 146256 B 镜像匹配。约 21.26 秒 120 组只读采样：遥控累计有效帧为 0、
+  remote_online=false，底盘未使能，四轮目标和命令电流全为 0；四轮反馈持续更新，
+  CAN1 发送错误/ESR=0。当前遥控接收未通，不能宣称转动通过；未烧录或注入运动。
+- 板上遥控接入也不同于源码：含第三方 nyush_remote 与 BspRcDiagnostics；
+  DBUS 初始化完成，但接收事件/字节均为 0，UART BUSY_RX、重复启动返回 HAL_BUSY。
+  尚待用户确认遥控开机/对频及接收机连接，不能据此认定驱动故障。
+  板上底盘控制器逻辑 ID 顺序为 2/1/4/3，物理轮位不能从下标推断。
+- 新增普通遥控三轴正负输入、死区、失联清除命令回归，GCC 主机测试及步兵增量
+  ARM 构建、diff 空白检查通过；底层/RTOS 未改。证据补充在上述检查文档和
+  `build/diagnostics/remote-20260913/`；逐字节反馈存在撕裂，不以速度尖峰证明转动。
+- 用户要求 CAN1 四轮逆时针编号 1..4 并检测转动。暂定俯视左前为 1，依次
+  左前、左后、右后、右前；起点、M3508/C620 实物型号和架空条件尚未收到确认。
+- 步兵配置保留运动学数组及逻辑 ID 0..3，对应反馈改为 0x201/0x204/0x202/0x203，
+  0x200 命令槽为 0/3/1/2；未改硬件电调编号、方向、PID、哨兵或冻结底层。
+- 实机 OpenOCD 只读检查：3.33 V，CPU running，CFSR/HFSR=0；4.21 秒 40 组采样
+  确认 CAN1 0x201..0x204 均持续反馈，发送错误及 ESR 为 0。1/2/4 号 0 RPM，
+  3 号 −3..2 RPM、编码仅变化 2 刻度，不能认定转动测试通过。没有发运动命令。
+- 板上镜像匹配保存的 linux-aarch64-306202d6/inf-debug 构建（146256 B），
+  实际逻辑 ID 为 1..4，接口/云台代码与当前仓库不同。采样按匹配 ELF 解释，
+  未烧录当前较旧源码覆盖它；需先恢复对应源码再上板，新增映射尚未生效。
+- GCC 主机测试（含两车型配置与新映射回归）通过；步兵独立 Debug ARM 构建通过，
+  FLASH/RAM 127040/47800 B。当时 firmware.py 拒绝 Linux，后续修复见本节开头。
+- 详细证据及未完成的逐轮转动条件见 `docs/chassis-can1-check.md`；原始读数在
+  `build/diagnostics/chassis-20260913/`。未启用 RTOS。
+
+## 环境任务（2026-09-07，历史记录）
 
 - 在 Windows x64 新克隆中配置可复现的开发环境；使用 just/Python 统一入口，
   默认保存 infantry_standard、Debug、ST-Link/SWD、允许唯一探针、校验后不复位运行。

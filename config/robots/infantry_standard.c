@@ -7,7 +7,7 @@
 /**
  * @brief Standard Infantry Robot Configuration
  *
- * This configuration matches the current hardcoded values exactly:
+ * Hardware families used by this configuration:
  * - 4x M3508 chassis motors (mecanum wheels)
  * - 2x GM6020 gimbal motors (pitch + yaw)
  * - 3x M3508 shooter motors (turntable + 2x friction wheels)
@@ -16,7 +16,12 @@
 // Motor configuration array
 static const MotorConfig_t g_motor_configs_infantry_standard[] = {
     // ========== CHASSIS MOTORS (4x M3508) ==========
-    // Front-left chassis motor (ID 0)
+    /*
+     * 暂按俯视左前为 1 号，逆时针为左前、左后、右后、右前。
+     * 电调硬件编号为 1..4；这里只配置收发映射，不修改电调内部编号。
+     * 数组仍按运动学要求保持左前、右前、左后、右后，逻辑 ID 不变。
+     */
+    // 左前：轮 1，逻辑 ID 0，CAN1 反馈 0x201，0x200 命令槽 0。
     {
         .motor_id = 0,
         .vendor = MOTOR_VENDOR_DJI,
@@ -33,8 +38,23 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}          // Not used
     },
 
-    // Front-right chassis motor (ID 1)
+    // 右前：轮 4，逻辑 ID 1，CAN1 反馈 0x204，0x200 命令槽 3。
     {.motor_id = 1,
+     .vendor = MOTOR_VENDOR_DJI,
+     .type = MOTOR_TYPE_M3508,
+     .role = MOTOR_ROLE_CHASSIS_DRIVE,
+     .control_mode = MOTOR_CONTROL_APPLICATION,
+     .can_channel = CAN_CHANNEL_1,
+     .can_rx_id = 0x204,
+     .can_tx_id = 0x200,
+     .tx_slot = 3,
+     .direction = +1,
+     .limits.m3508 = {.speed_limit = 10000.0f},
+     .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},
+     .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
+
+    // 左后：轮 2，逻辑 ID 2，CAN1 反馈 0x202，0x200 命令槽 1。
+    {.motor_id = 2,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_CHASSIS_DRIVE,
@@ -48,8 +68,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // Back-left chassis motor (ID 2)
-    {.motor_id = 2,
+    // 右后：轮 3，逻辑 ID 3，CAN1 反馈 0x203，0x200 命令槽 2。
+    {.motor_id = 3,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_CHASSIS_DRIVE,
@@ -58,21 +78,6 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .can_rx_id = 0x203,
      .can_tx_id = 0x200,
      .tx_slot = 2,
-     .direction = +1,
-     .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},
-     .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
-
-    // Back-right chassis motor (ID 3)
-    {.motor_id = 3,
-     .vendor = MOTOR_VENDOR_DJI,
-     .type = MOTOR_TYPE_M3508,
-     .role = MOTOR_ROLE_CHASSIS_DRIVE,
-     .control_mode = MOTOR_CONTROL_APPLICATION,
-     .can_channel = CAN_CHANNEL_1,
-     .can_rx_id = 0x204,
-     .can_tx_id = 0x200,
-     .tx_slot = 3,
      .direction = -1,
      .limits.m3508 = {.speed_limit = 10000.0f},
      .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},

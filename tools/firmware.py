@@ -16,9 +16,11 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 import stlink_usb
+import openocd_programmer
 
 ALIASES = {}
 
@@ -27,8 +29,11 @@ CONFIG = ROOT / ".firmware.local.json"
 ROBOTS = ("infantry_standard", "sentry_swerve")
 PINS = {"cmake": "4.2.3", "ninja": "1.13.1", "gcc": "14.3.1",
         "cube": "2.21.0", "just": "1.46.0"}
+# Linux ARM64 reuses the installed build tools; other hosts retain their pins.
+LINUX_ARM64_PINS = {**PINS, "cmake": "4.4.3", "ninja": "1.13.2",
+                    "gcc": "15.3.1", "just": "1.58.0", "openocd": "0.12.0"}
 NAMES = {"cmake": "cmake", "ninja": "ninja", "gcc": "arm-none-eabi-gcc",
-         "cube": "STM32_Programmer_CLI", "just": "just", "git": "git"}
+         "cube": "STM32_Programmer_CLI", "openocd": "openocd", "just": "just", "git": "git"}
 
 
 class Failure(RuntimeError):
@@ -71,13 +76,15 @@ def windows_paths(paths):
             run([subst, drive, "/d"])
 
 
-def run(args, *, env=None, show=False, cwd=ROOT):
+def run(args, *, env=None, show=False, cwd=ROOT, log=None):
     """Run an argument array without a shell; never continue after a failure."""
     args = [native_path(a) if Path(str(a)).is_absolute() else str(a) for a in args]
     if show:
         print("[command] " + json.dumps(args, ensure_ascii=False), flush=True)
     result = subprocess.run(args, cwd=cwd, env=env, text=True, encoding="utf-8",
                             errors="replace", stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if log is not None:
+        Path(log).write_text(result.stdout, encoding="utf-8")
     if show or result.returncode:
         print(result.stdout, end="", flush=True)
     if result.returncode:
@@ -89,9 +96,23 @@ def host():
     arch = os.environ.get("PROCESSOR_ARCHITEW6432", platform.machine()).lower()
     if platform.system() == "Windows" and arch in ("arm64", "aarch64"):
         raise Failure("Windows ARM64 is blocked: Arm 14.3.Rel1 host and ST USB driver support are not confirmed. Use Windows x64 or a supported Mac.")
+    if platform.system() == "Linux":
+        if arch not in ("arm64", "aarch64"):
+            raise Failure("Linux build support currently requires ARM64 (aarch64). Other Linux hosts have not been qualified.")
+        return "linux-aarch64"
     if platform.system() not in ("Windows", "Darwin"):
-        raise Failure("This workflow supports Windows x64 and macOS. Other hosts have not been qualified.")
+        raise Failure("This workflow supports Windows x64, macOS and Linux ARM64 builds. Other hosts have not been qualified.")
     return f"{platform.system().lower()}-{arch}"
+
+
+def tool_pins():
+    """Return host-specific versions; do not trust versions supplied by local config."""
+    if platform.system() == "Linux":
+        return dict(LINUX_ARM64_PINS)
+    pins = dict(PINS)
+    if platform.system() == "Darwin" and platform.machine() == "x86_64":
+        pins["gcc"] = "14.2.1"
+    return pins
 
 
 def load_config(required=True):
@@ -148,21 +169,35 @@ def discover(cfg, name, required=True):
     return None
 
 
-def toolset(cfg, cube_required=False):
+def backend(cfg):
+    """Select the saved programmer; missing settings keep the native host default."""
+    value = cfg.get("flash", {}).get("backend") or ("openocd" if platform.system() == "Linux" else "cubeprogrammer")
+    if value not in ("openocd", "cubeprogrammer"):
+        raise Failure("Unknown flash backend; use openocd or cubeprogrammer.")
+    if value == "openocd" and platform.system() != "Linux":
+        raise Failure("The OpenOCD backend currently supports Linux only.")
+    return value
+
+
+def toolset(cfg, cube_required=False, openocd_required=False):
     host()
+    programmer = "openocd" if backend(cfg) == "openocd" else "cube"
     paths, versions = {}, {}
     print(f"[host] {platform.platform()} | Python {platform.python_version()} | {sys.executable}")
     for name in NAMES:
-        path = discover(cfg, name, required=name != "cube" or cube_required)
+        if name in ("cube", "openocd") and name != programmer:
+            continue
+        required = cube_required if name == "cube" else openocd_required if name == "openocd" else True
+        path = discover(cfg, name, required=required)
         if path is None:
-            print("[tool] cube: missing; build remains available")
+            print(f"[tool] {name}: missing; build remains available")
             continue
         version = run([path, "--version"])
         match = re.search(r"\d+\.\d+(?:\.\d+)?", version)
         value = match.group() if match else "unknown"
         if name == "gcc":
             value = run([path, "-dumpfullversion"]).strip()
-        expected = "14.2.1" if name == "gcc" and platform.system() == "Darwin" and platform.machine() == "x86_64" else PINS.get(name)
+        expected = tool_pins().get(name)
         if expected and value != expected:
             raise Failure(f"{name}: expected {expected}, got {value} at {path}. Install the pinned version alongside existing tools and configure its explicit path.")
         paths[name], versions[name] = path, value
@@ -212,7 +247,9 @@ def build_dir(cfg, robot, paths):
     # Keep Ninja/GCC scratch and object paths below legacy Windows path limits.
     platform_tag = "w64" if os.name == "nt" else host()
     target = ("inf" if robot == "infantry_standard" else "sen") + "-" + cfg["mode"].lower()
-    return ROOT / "build" / (platform_tag + "-" + identity) / target
+    # Preserve earlier Linux binaries used to interpret the running board's RAM.
+    base = ROOT / "build" / "verified" if platform.system() == "Linux" else ROOT / "build"
+    return base / (platform_tag + "-" + identity) / target
 
 
 def check_cache(directory, cfg, robot, paths):
@@ -220,7 +257,7 @@ def check_cache(directory, cfg, robot, paths):
     if not cache.exists():
         return
     data = dict(re.findall(r"^([A-Za-z0-9_.-]+):[^=\n]*=(.*)$", cache.read_text(encoding="utf-8"), re.M))
-    compiler_info = directory / "CMakeFiles" / PINS["cmake"] / "CMakeCCompiler.cmake"
+    compiler_info = directory / "CMakeFiles" / tool_pins()["cmake"] / "CMakeCCompiler.cmake"
     if compiler_info.exists():
         match = re.search(r'set\(CMAKE_C_COMPILER "([^"]+)"\)', compiler_info.read_text(encoding="utf-8"))
         if match:
@@ -347,8 +384,8 @@ def choose_probe(serials, settings):
         raise Failure("No usable ST-Link serial enumerated. See the CubeProgrammer/USB diagnostics above; run just doctor after reconnecting. No target connection or write performed.")
     serial = settings.get("serial")
     if serial:
-        if serial not in serials:
-            raise Failure("Configured probe serial is not present; no other probe will be selected.")
+        if serials.count(serial) != 1:
+            raise Failure("Configured probe serial is missing or duplicated; no other probe will be selected.")
         return serial
     if len(serials) != 1 or not settings["allow_single"]:
         raise Failure("Multiple probes or no single-probe permission. Save --serial SERIAL; never selecting the first probe.")
@@ -422,6 +459,69 @@ def flash(cfg, robot, paths, versions):
     print("[flash OK] Download and verification succeeded. Robot behavior has NOT been validated.")
 
 
+def openocd_probe(cfg):
+    """Choose one Linux USB serial before any SWD connection; never pick the first."""
+    settings = dict(flash_settings(cfg))
+    if settings.get("serial"):
+        settings["serial"] = settings["serial"].upper()
+    return choose_probe(openocd_programmer.probes(), settings)
+
+
+def plan_openocd(cfg, robot, paths):
+    settings = flash_settings(cfg)
+    directory = build_dir(cfg, robot, paths) / "flash-<unique-transaction>"
+    # Zeros stand in for the serial selected at flash time; planning reads no USB.
+    serial = settings.get("serial") or "0" * 24
+    script = openocd_programmer.script(serial, image=directory / "firmware.elf",
+                                      backup=directory / "before-flash.bin",
+                                      run_after=settings["run_after"])
+    print(json.dumps({"plan_only": True, "backend": "openocd", "robot": robot,
+                      "mode": cfg["mode"], "run_after": settings["run_after"],
+                      "serial": settings.get("serial") or "<sole-connected-probe>",
+                      "steps": ["build and inspect ELF", "choose exact USB serial",
+                                "stage and hash ELF", "read target ID and capacity",
+                                "back up 1 MiB Flash", "software reset and halt",
+                                "write and verify", "optional reset/run"],
+                      "script_template": script, "hardware_commands_executed": 0}, indent=2))
+
+
+def flash_openocd(cfg, robot, paths, versions):
+    """Build then stage one verified ELF; retain the original Flash and complete log."""
+    settings = flash_settings(cfg)
+    record = build(cfg, robot, paths, versions)
+    serial = openocd_probe(cfg)
+    elf = Path(record["elf"])
+    directory = Path(tempfile.mkdtemp(prefix="flash-", dir=elf.parent))
+    staged = directory / "firmware.elf"
+    staged.write_bytes(elf.read_bytes())
+    if sha256(staged) != record["sha256"]:
+        raise Failure("ELF changed after build; refusing to write.")
+    backup = directory / "before-flash.bin"
+    script = directory / "program.tcl"
+    script.write_text(openocd_programmer.script(serial, image=staged, backup=backup,
+                                               run_after=settings["run_after"]), encoding="utf-8")
+    log = directory / "openocd.log"
+    record.update({"backend": "openocd", "probe": serial, "staged_elf": str(staged),
+                   "backup": str(backup), "log": str(log), "run_after": settings["run_after"]})
+    manifest = directory / "flash-manifest.json"
+    manifest.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    print("[before write] " + json.dumps(record, indent=2), flush=True)
+    try:
+        output = run([paths["openocd"], "-f", script], show=True, log=log)
+    except (Failure, OSError) as exc:
+        wrote = log.exists() and "FW_WRITE_STARTED" in log.read_text(encoding="utf-8")
+        state = "Flash may be partially programmed; do not run it." if wrote else "Programming was not reached; inspect the target state in the log."
+        raise Failure(f"OpenOCD failed. {state} No automatic retry or post-failure reset/run. Log: {log}. {exc}") from exc
+    if not all(re.search(r"^" + marker + r"$", output, re.M) for marker in ("FW_BACKUP_OK", "FW_VERIFY_OK", "FW_FLASH_OK")):
+        raise Failure(f"OpenOCD did not report completed backup/write/verification. Inspect {log}; no retry requested.")
+    if not backup.is_file() or backup.stat().st_size != 1048576:
+        raise Failure(f"Flash backup is missing or incomplete; inspect {directory}.")
+    record["backup_sha256"] = sha256(backup)
+    record["verified"] = True
+    manifest.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    print(f"[flash OK] OpenOCD write and verification succeeded; run_after={settings['run_after']}. Backup: {backup}")
+
+
 @contextlib.contextmanager
 def operation_lock():
     """Exclude simultaneous builds/flash operations, without deleting user directories."""
@@ -441,7 +541,7 @@ def operation_lock():
 def configure(args):
     cfg = load_config(False)
     cfg.update({"robot": args.robot, "mode": args.mode,
-                "flash": {"interface": "SWD", "serial": args.serial,
+                "flash": {"backend": args.backend or backend(cfg), "interface": "SWD", "serial": args.serial,
                           "allow_single": args.allow_single == "yes", "run_after": args.run_after == "yes"}})
     for item in args.tool:
         key, sep, value = item.partition("=")
@@ -461,7 +561,8 @@ def configure(args):
         directories.append(str(Path(launcher).parent))
     settings["firmware.justPath"] = paths["just"]
     settings["firmware.toolPath"] = os.pathsep.join(dict.fromkeys(directories))
-    key = "terminal.integrated.env.windows" if os.name == "nt" else "terminal.integrated.env.osx"
+    terminal_os = {"Windows": "windows", "Darwin": "osx", "Linux": "linux"}[platform.system()]
+    key = "terminal.integrated.env." + terminal_os
     settings.setdefault(key, {})["PATH"] = os.pathsep.join(dict.fromkeys(directories)) + os.pathsep + "${env:PATH}"
     if os.name == "nt":
         settings.setdefault("terminal.integrated.defaultProfile.windows", "PowerShell")
@@ -487,6 +588,7 @@ def main(argv=None):
     p.add_argument("--run-after", choices=("yes", "no"), default="no")
     p.add_argument("--allow-single", choices=("yes", "no"), default="yes")
     p.add_argument("--serial")
+    p.add_argument("--backend", choices=("openocd", "cubeprogrammer"))
     p.add_argument("--tool", action="append", default=[])
     sub.add_parser("doctor")
     for name in ("build", "flash", "flash-plan"):
@@ -500,27 +602,36 @@ def main(argv=None):
             configure(args)
         return
     cfg = load_config(required=args.command != "doctor")
-    paths, versions = toolset(cfg, cube_required=args.command == "flash")
+    programmer = backend(cfg)
+    paths, versions = toolset(cfg, cube_required=args.command == "flash" and programmer == "cubeprogrammer",
+                             openocd_required=args.command == "flash" and programmer == "openocd")
     if args.command == "doctor":
         print("[doctor] BUILD ENVIRONMENT READY (hardware not required)")
         try:
             robot = selected(cfg)
             f = flash_settings(cfg)
             print(f"[config] {robot} {cfg['mode']}; SWD; run_after={f['run_after']}")
+            if programmer == "openocd":
+                if "openocd" not in paths:
+                    raise Failure("OpenOCD is missing.")
+                serial = openocd_probe(cfg)
+                print(f"[doctor] USB probe available: {serial}. USB access/SWD/target verification pending; no connection made.")
+                return
             if "cube" not in paths:
                 raise Failure("CubeProgrammer is missing.")
             serial = choose_probe(enumerate_probes(paths["cube"]), f)
             print(f"[doctor] Probe available: {serial}. Target identity/wiring/write verification pending; no connection made.")
-        except Failure as exc:
+        except (Failure, ValueError, OSError) as exc:
             print(f"[doctor] FLASH NOT READY: {exc}")
         return
     robot = selected(cfg, args.robot)
     if args.command == "flash-plan":
         with operation_lock(), windows_paths(paths):
-            plan(cfg, robot, paths)
+            (plan_openocd if programmer == "openocd" else plan)(cfg, robot, paths)
     else:
         with operation_lock(), windows_paths(paths):
-            (flash if args.command == "flash" else build)(cfg, robot, paths, versions)
+            action = flash_openocd if programmer == "openocd" else flash
+            (action if args.command == "flash" else build)(cfg, robot, paths, versions)
 
 
 if __name__ == "__main__":

@@ -40,6 +40,9 @@ def github_asset(repo, tag, name):
 
 
 def sources():
+    # Linux builds reuse explicitly configured tools; no Linux installer is provided.
+    if platform.system() == "Linux":
+        raise fw.Failure("Linux bootstrap is not implemented. Configure existing Linux ARM64 tools using docs/quickstart.md; no macOS packages will be downloaded.")
     win = os.name == "nt"
     intel = platform.machine() == "x86_64"
     arch = "x86_64" if intel or win else "aarch64"

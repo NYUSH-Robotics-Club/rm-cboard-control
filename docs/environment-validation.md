@@ -1,6 +1,43 @@
-# 环境验证记录 · 2026-09-07
+# 环境验证记录
 
-最新状态：用户后续实际下载报 Sector[0] 失败；只读检查确认 Flash 已部分写入，
+## 2026-09-13：Linux OpenOCD 烧录入口修复
+
+此前 `just flash` 被 Linux 未实现保护直接拒绝。现已接入本机 OpenOCD 0.12.0，
+支持 Linux sysfs 探针选择、只读计划、F407 身份/容量检查、完整 Flash 备份、
+构建产物副本、写入/校验及保存的运行偏好。
+
+- 24 项原工具测试及 9 项新增测试通过，新增测试在 Tcl 模拟目标上实际执行生成的
+  脚本，覆盖备份、写入、校验失败、保持暂停及校验成功后运行顺序和特殊字符路径。
+- `just build`、`just doctor`、`just flash-plan` 和 Python 语法检查通过。
+  本机后端为 openocd，run_after=true，计划对应当前步兵源码。
+- 新脚本经 SWD 实机只读检查通过，约 3.33 V，ID 0x413，Flash 1024 KiB。
+  未执行脚本的写入分支，不能把模拟验证或身份读取称为烧录成功。
+- 当前源码与板上版本不同，待明确替换意图后才能完成实际写入/校验；备份和日志
+  将保存在本次车型构建目录下的独立 `flash-*` 子目录。源码与冻结底层未改动。
+
+## 2026-09-13：Linux ARM64 的 just build 修复
+
+复现原入口报错 `This workflow supports Windows x64 and macOS`；主机检查在编译前
+拒绝 Linux。本机已有工具为 CMake 4.4.3、Ninja 1.13.2、GCC 15.3.1、just 1.58.0，
+与原 Windows/macOS 固定版本不同。已新增独立 Linux ARM64 版本配置，保持版本校验，
+并修正 CMake 编译器缓存文件的版本目录和 configure 的 Linux 终端 PATH。
+
+- 24 项 Python 工具测试通过，包括主机/版本、缓存编译器不匹配、旧产物隔离和
+  Linux 不支持的下载/烧录入口拒绝检查。
+- `just build` 完整及重复构建、`just build sentry_swerve` 完整构建通过。
+  步兵 FLASH/RAM 为 127040/47800 B，哨兵为 129408/47808 B，CCMRAM 均为 0。
+- 双车型 ARM EABI5 hard-float、向量与地址范围、无未解析符号检查通过；
+  ELF/map/BIN/HEX/inspection/manifest 生成在 `build/verified/linux-aarch64-306202d6/`。
+  RTOS 启动/调度器符号均未链接。
+- 原 `build/linux-aarch64-306202d6/inf-debug/NYUSH_Infantry.bin` 的 SHA-256
+  仍为 `8e5a1434bcc1a51cb120ca5193b4ca42cf857abf28a0b35d2037c958817a75e6`，未覆盖。
+- 此构建修复没有安装工具、烧录或访问硬件；当时 Linux 自动安装及统一 flash 尚未实现，
+  后续 OpenOCD 接入见上节。
+  板上运行状态与遥控检查见 [CAN1 检查](chassis-can1-check.md)，下方为历史记录。
+
+## 2026-09-07：Windows 环境与下载诊断
+
+当时最新状态：用户后续实际下载报 Sector[0] 失败；只读检查确认 Flash 已部分写入，
 CPU 处于 locked up 状态。脚本已将下载阶段由 HOTPLUG 改为 NORMAL/SWrst（复位后暂停），
 身份检查仍为 HOTPLUG。18 项模拟测试/flash-plan 通过；修订后的真实重烧仍待验证，
 不能宣称已修复硬件下载或把 99% 当成功。详情见下方失败诊断。

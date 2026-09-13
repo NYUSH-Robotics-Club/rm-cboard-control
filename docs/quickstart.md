@@ -6,7 +6,7 @@
 
 ## 版本、来源与权限
 
-优先复用下表版本，不替换其他工程的依赖。CMake 4.2.3 / Ninja 1.13.1 是本机已有且双车型实测通过的组合，因此没有升级到历史文档的 4.4.3 / 1.13.2。编译脚本严格核对固定版本；Python/编辑器不影响目标 ABI，已有可用版本可复用。
+下表适用于 Windows/macOS，不替换其他工程的依赖。CMake 4.2.3 / Ninja 1.13.1 是 Windows 已有且双车型实测通过的组合。Linux ARM64 使用后文单独列出的固定版本。编译脚本严格核对各主机版本；Python/编辑器不影响目标 ABI，已有可用版本可复用。
 
 | 工具 | 固定版本/主机包 | 官方来源与安装 | 权限 | 验证命令 |
 |---|---|---|---|---|
@@ -119,11 +119,65 @@ Mac 两个架构分别提供安装选择，目标系统取 ST 手册列出的 ma
 
    VS Code 新终端直接执行 `just doctor`、`just build`、`just flash-plan`。有多探针、需要复位运行时，使用与 Windows 相同的 `--serial`、`--allow-single`、`--run-after` 参数。以上 Mac 实现/安装步骤均**待 Mac 实机验证**。
 
+## Linux ARM64 构建
+
+2026-09-13 已实测本机 aarch64 的双车型 Debug 构建。固定工具为 CMake 4.4.3、
+Ninja 1.13.2、Arm GNU Toolchain 15.3.Rel1（GCC 15.3.1，目标 `arm-none-eabi`）、
+just 1.58.0；复用 `.firmware.local.json` 中已安装的工具路径。
+Linux x86_64 尚未纳入此入口，Windows/macOS 版本要求保持不变。
+
+已有本机配置时直接运行 `just build`。如果外部终端提示 `just: command not found`，
+可用不依赖 just 的等价入口：
+
+```sh
+python3 tools/firmware.py build
+python3 tools/firmware.py build sentry_swerve
+```
+
+也可从本机配置中读取 just 的完整路径执行；VS Code 已有本地工具 PATH 设置时，
+新建终端即可使用 `just build`。首次配置使用
+`python3 tools/firmware.py configure infantry_standard --mode Debug --run-after no`，
+必要时通过 `--tool 名称=完整路径` 指定上述版本。
+配置现在正确生成 `terminal.integrated.env.linux`。
+
+Linux 产物写入 `build/verified/linux-aarch64-<路径标识>/<车型>-debug/`，保留原来
+`build/linux-aarch64-<路径标识>/` 中用于实机诊断的旧镜像。
+构建仍执行缓存、ARM ELF、内存、向量与未解析符号检查并生成 BIN/HEX/manifest。
+
+`bootstrap.py` 尚无 Linux 自动安装流程，会明确停止，避免选择 macOS 包。
+Linux 烧录现在使用已配置的 OpenOCD 0.12.0；Windows/macOS 默认仍使用 CubeProgrammer。
+`flash.backend` 保存后端，Linux 缺省为 `openocd`，其他主机缺省为 `cubeprogrammer`。
+需要显式配置时使用 `configure --backend openocd --tool openocd=完整可执行文件路径`。
+
+```sh
+just doctor      # 读取 Linux sysfs 中的探针信息，不打开 SWD
+just flash-plan  # 显示当前车型、复位运行设置及完整脚本模板，不连接设备
+just flash       # 构建、备份、下载、校验；按保存的 run_after 决定是否复位运行
+```
+
+OpenOCD 流程先选择唯一序列号，再在同一连接内核对设备 ID `0x413` 和 1024 KiB
+容量，完整备份 1 MiB Flash，然后以 SYSRESETREQ 软件复位并暂停，写入本次构建的
+ELF 副本并执行 `verify_image`。任意步骤失败都不会继续到复位运行；未请求运行时
+校验后保持 halted。每次操作单独保存 `flash-*/firmware.elf`、`before-flash.bin`、
+`program.tcl`、`openocd.log` 和 `flash-manifest.json`，成功时记录备份 SHA-256。
+多探针或重复序列号不会自动选择第一支。旧 ST-Link/V2 的 12 字节 USB 序列号会
+按 OpenOCD 的格式转为 24 位十六进制。
+
+当前本机保存的是 `run_after=true`，执行 `just flash` 校验成功后会复位运行。
+源码与现有板上固件有版本差异，详见 [实机记录](chassis-can1-check.md)；工具修复
+已完成只读连接和模拟写入/失败验证，尚未实际替换板上固件。若 Linux 报 USB
+`open failed`，检查设备权限及其他调试器是否占用；脚本不会自行 sudo、安装驱动
+或放宽设备权限。调试环境沙箱外的只读连接已通过。
+
+OpenOCD 参数依据：[适配器配置](https://openocd.org/doc/html/Debug-Adapter-Configuration.html)、
+[写入与校验](https://openocd.org/doc/html/Flash-Commands.html)。
+下文 CubeProgrammer 下载命令适用于 `cubeprogrammer` 后端。
+
 ## 日常命令与硬件边界
 
 | 命令 | 行为 |
 |---|---|
-| `just doctor` | 显示实际工具路径/版本；报告编译就绪状态；只通过 `-l stlink-only` 枚举探针，不连接芯片 |
+| `just doctor` | 显示工具路径/版本；Linux OpenOCD 后端读 sysfs，CubeProgrammer 后端用 `-l stlink-only` 枚举探针；不连接芯片 |
 | `just build` | 构建保存的车型、检查 ELF/map/cache、生成本次 bin/hex 和 manifest |
 | `just build sentry_swerve` | 仅本次选择哨兵，不改变默认车型 |
 | `just flash-plan` | 不连接设备，不下载/擦除/复位；显示下一次烧录的流程与命令模板，不把已有 ELF 当作新构建证据 |
@@ -153,8 +207,9 @@ VS Code 任务面板使用 **Firmware: Doctor / Build / Flash**。这些任务�
 这是调试适配器/目标芯片配置，不是 Windows USB 驱动安装包。本工程是 F407，
 不能照搬 H7 目标。适配文件保存在 [tools/openocd/stm32f407-stlink.cfg](../tools/openocd/stm32f407-stlink.cfg)，
 使用 F4 目标并保留 `reset_config none`；保留源文件 GPL-2.0-or-later 标记。
-该文件供后续 OpenOCD 使用，当前未安装/实测 OpenOCD；`just flash` 仍按项目要求使用 CubeProgrammer，
-不读取 `.cfg`。`reset_config none` 也不等于所有 OpenOCD 命令都不会软件复位。
+该文件可供独立 OpenOCD 调用；Linux 的 `just flash` 生成带身份检查和备份的独立脚本，
+不直接读取此 `.cfg`。Windows/macOS 默认使用 CubeProgrammer。
+`reset_config none` 也不等于所有 OpenOCD 命令都不会软件复位。
 
 先运行 `just doctor`，它显示 CubeProgrammer 原始枚举输出；枚举失败时，Windows
 还会列出当前 USB 设备、服务和错误码，区分以下情况，全程不连接目标芯片：

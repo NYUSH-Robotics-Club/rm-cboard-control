@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import firmware as fw
+import bootstrap
 
 
 class FirmwareSafetyTests(unittest.TestCase):
@@ -36,6 +37,64 @@ class FirmwareSafetyTests(unittest.TestCase):
     def test_explicit_override_does_not_modify_saved_robot(self):
         self.assertEqual(fw.selected(self.cfg, "sentry_swerve"), "sentry_swerve")
         self.assertEqual(self.cfg["robot"], "infantry_standard")
+
+    def test_linux_arm64_host_and_version_pins(self):
+        with patch.object(fw.platform, "system", return_value="Linux"), patch.dict(fw.os.environ, {}, clear=True):
+            for arch in ("aarch64", "arm64"):
+                with patch.object(fw.platform, "machine", return_value=arch):
+                    self.assertEqual(fw.host(), "linux-aarch64")
+            self.assertEqual(fw.tool_pins()["gcc"], "15.3.1")
+            self.assertEqual(fw.tool_pins()["cmake"], "4.4.3")
+            with patch.object(fw.platform, "machine", return_value="x86_64"):
+                with self.assertRaises(fw.Failure):
+                    fw.host()
+
+    def test_existing_host_pins_and_windows_arm64_rejection(self):
+        with patch.dict(fw.os.environ, {}, clear=True):
+            for system, arch, gcc in (("Windows", "AMD64", "14.3.1"),
+                                      ("Darwin", "arm64", "14.3.1"),
+                                      ("Darwin", "x86_64", "14.2.1")):
+                with patch.object(fw.platform, "system", return_value=system), patch.object(fw.platform, "machine", return_value=arch):
+                    self.assertEqual(fw.host(), system.lower() + "-" + arch.lower())
+                    self.assertEqual(fw.tool_pins()["gcc"], gcc)
+                    self.assertEqual(fw.tool_pins()["cmake"], "4.2.3")
+            with patch.object(fw.platform, "system", return_value="Windows"), patch.object(fw.platform, "machine", return_value="ARM64"):
+                with self.assertRaises(fw.Failure):
+                    fw.host()
+
+    def test_linux_still_rejects_wrong_tool_version(self):
+        with patch.object(fw, "host", return_value="linux-aarch64"), patch.object(fw.platform, "system", return_value="Linux"), patch.object(fw, "discover", return_value="cmake"), patch.object(fw, "run", return_value="cmake version 4.2.3"):
+            with self.assertRaisesRegex(fw.Failure, "expected 4.4.3, got 4.2.3"):
+                fw.toolset({})
+
+    def test_linux_build_preserves_legacy_artifact_directory(self):
+        with patch.object(fw.platform, "system", return_value="Linux"), patch.object(fw, "host", return_value="linux-aarch64"):
+            result = fw.build_dir(self.cfg, "infantry_standard", {"gcc": "compiler"})
+            self.assertTrue(result.is_relative_to(fw.ROOT / "build" / "verified"))
+            self.assertEqual(result.name, "inf-debug")
+
+    def test_linux_cache_checks_compiler_from_matching_cmake_version(self):
+        # Modern CMake stores the compiler in this file rather than the cache.
+        with tempfile.TemporaryDirectory() as d, patch.object(fw.platform, "system", return_value="Linux"):
+            root = Path(d)
+            compiler = root / "arm-none-eabi-gcc"
+            compiler.touch()
+            (root / "CMakeCache.txt").write_text(
+                f"ROBOT_TYPE:STRING=infantry_standard\nCMAKE_BUILD_TYPE:STRING=Debug\n"
+                f"CMAKE_GENERATOR:INTERNAL=Ninja\nCMAKE_HOME_DIRECTORY:INTERNAL={fw.ROOT}\n")
+            info = root / "CMakeFiles/4.4.3/CMakeCCompiler.cmake"
+            info.parent.mkdir(parents=True)
+            info.write_text(f'set(CMAKE_C_COMPILER "{compiler.as_posix()}")\n')
+            fw.check_cache(root, self.cfg, "infantry_standard", {"gcc": str(compiler)})
+            info.write_text('set(CMAKE_C_COMPILER "/missing/compiler")\n')
+            with self.assertRaisesRegex(fw.Failure, "Cache mismatch CMAKE_C_COMPILER"):
+                fw.check_cache(root, self.cfg, "infantry_standard", {"gcc": str(compiler)})
+
+    def test_linux_bootstrap_stops_before_external_commands(self):
+        with patch.object(fw.platform, "system", return_value="Linux"), patch.object(fw, "run") as external:
+            with self.assertRaisesRegex(fw.Failure, "Linux bootstrap is not implemented"):
+                list(bootstrap.sources())
+            external.assert_not_called()
 
     def test_probe_boundaries(self):
         settings = self.cfg["flash"]
