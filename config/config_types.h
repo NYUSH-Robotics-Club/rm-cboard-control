@@ -169,6 +169,8 @@ typedef struct {
             float angle_max;            // Maximum angle limit (encoder units)
             float gravity_compensation; // Gravity compensation torque (for pitch axis)
             float initial_angle;        // 编码器刻度；pitch启动/重新对齐目标，负数则锁存当前位置。
+            float gravity_zero_angle;   // 云台应用重力正弦项的零点，绝对编码刻度；默认0保留原生编码基准。
+            bool enable_yaw_pitch_compensation; // 默认false；true允许旧yaw耦合算法改写pitch目标，与重力项独立。
         } gm6020;
 
         // M3508-specific parameters

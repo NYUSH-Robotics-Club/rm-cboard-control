@@ -22,7 +22,7 @@ void last_data(float last_yaw_rate, float last_yaw_target);
  * @param id Configured pitch motor ID
  * @param rate_normalized Normalized pitch rate (-1.0 to 1.0, always responds to joystick)
  * @param sensor_data Sensor data pointer
- * @param disable_yaw_pitch_compensation Disable yaw-pitch coupling compensation (true in auto-aim mode)
+ * @param disable_yaw_pitch_compensation true强制禁用耦合（自瞄）；false仍须配置显式开启才补偿。
  * @return Native motor command counts; invalid enabled feedforward returns zero
  *         and requires gimbal startup alignment again.
  */

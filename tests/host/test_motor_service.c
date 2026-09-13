@@ -8,7 +8,7 @@ static int16_t s_last_current = 0;
 static unsigned int s_flush_count = 0U;
 static unsigned int s_can_frame_count = 0U;
 
-static const MotorConfig_t s_motors[] = {{
+static MotorConfig_t s_motors[] = {{
     .motor_id = 0,
     .vendor = MOTOR_VENDOR_DJI,
     .type = MOTOR_TYPE_M3508,
@@ -94,6 +94,18 @@ const MotorAdapterOps *LkMotorAdapter_Get(void) { return 0; }
 
 int main(void)
 {
+    /* 单位来自实际配置；未知模式不能冒充电流。 */
+    assert(MotorService_GetCommandUnit(0) == MOTOR_COMMAND_UNIT_CURRENT_COUNTS);
+    assert(MotorService_GetCommandUnit(99) == MOTOR_COMMAND_UNIT_UNKNOWN);
+    s_motors[0].type = MOTOR_TYPE_GM6020;
+    assert(MotorService_GetCommandUnit(0) == MOTOR_COMMAND_UNIT_VOLTAGE_COUNTS);
+    s_motors[0].protocol.dji.gm6020_mode = GM6020_COMMAND_CURRENT;
+    assert(MotorService_GetCommandUnit(0) == MOTOR_COMMAND_UNIT_CURRENT_COUNTS);
+    s_motors[0].protocol.dji.gm6020_mode = (GM6020CommandMode_e)99;
+    assert(MotorService_GetCommandUnit(0) == MOTOR_COMMAND_UNIT_UNKNOWN);
+    s_motors[0].protocol.dji.gm6020_mode = GM6020_COMMAND_VOLTAGE;
+    s_motors[0].type = MOTOR_TYPE_M3508;
+
     MsgEvent queue[8];
     MsgCenter_Init(queue, 8U);
 

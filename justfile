@@ -19,3 +19,7 @@ flash robot="":
 
 flash-plan robot="":
     flash-plan {{robot}}
+
+# Read the running board; first build/flash the firmware containing the snapshot.
+monitor hz="20":
+    monitor --hz {{hz}}

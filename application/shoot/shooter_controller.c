@@ -1,6 +1,7 @@
 /*
  * 接收发射命令并控制拨盘和摩擦轮。
- * 电机选择来自角色配置；任一发射电机失联时三台归零并清除控制历史。
+ * 电机选择来自角色配置；拨弹持续高电流时短时反转一次，重堵停拨盘。
+ * 任一发射电机失联时三台归零并清除控制历史，不在这里处理协议。
  */
 #include "shooter_controller.h"
 #include "motor_service.h"
@@ -13,6 +14,9 @@
 #include "bsp_can.h"
 
 #define MOTOR_FEEDBACK_TIMEOUT_MS (100U)
+
+/* 自定义堵转电流阈值：反馈绝对值的原始刻度，默认800；填写正整数。 */
+int16_t g_feed_stall_current_threshold = 800;
 
 // Static variables for app wrapper
 static ShootCmd s_last_cmd;
@@ -40,6 +44,84 @@ static float RampTowards(float current, float target, float step)
     if (current < target) { current += step; if (current > target) current = target; }
     else if (current > target) { current -= step; if (current < target) current = target; }
     return current;
+}
+
+/* 换向时清掉原方向积分/输出滤波，并用当前RPM初始化微分，避免旧出力抵消反转。 */
+static void ResetFeedPid(ShooterController *controller)
+{
+    PID_Reset(&controller->turntable_pid);
+    controller->turntable_pid.last_measure = controller->turntable_feedback.speed;
+}
+
+static void CancelFeedRecovery(ShooterController *controller)
+{
+    memset(&controller->feed_recovery, 0, sizeof(controller->feed_recovery));
+    controller->turntable_target = 0.0f;
+    controller->ramped_turntable = 0.0f;
+    ResetFeedPid(controller);
+}
+
+/* 在发流前运行；反馈/总线联锁必须先通过。时间来自毫秒时钟，不按回调次数累计。 */
+static void UpdateFeedRecovery(ShooterController *controller, uint32_t now_ms)
+{
+    FeedRecovery *recovery = &controller->feed_recovery;
+    if (g_feed_stall_current_threshold <= 0) {
+        recovery->state = FEED_RECOVERY_BLOCKED;
+        recovery->high_current_active = false;
+        controller->turntable_target = 0.0f;
+        controller->ramped_turntable = 0.0f;
+        ResetFeedPid(controller);
+        return;
+    }
+    if (recovery->state == FEED_RECOVERY_REVERSING) {
+        if (now_ms - recovery->reverse_since_ms < FEED_REVERSE_DURATION_MS) {
+            controller->turntable_target = -FEED_REVERSE_SPEED_RPM;
+            controller->ramped_turntable = controller->turntable_target;
+            return;
+        }
+        /* 到时结束反转，本轮零电流，下轮从零按原斜坡恢复正向拨弹。 */
+        recovery->state = FEED_RECOVERY_MONITORING;
+        recovery->high_current_active = false;
+        controller->turntable_target = 0.0f;
+        controller->ramped_turntable = 0.0f;
+        ResetFeedPid(controller);
+        return;
+    }
+    if (recovery->state == FEED_RECOVERY_BLOCKED) {
+        controller->turntable_target = 0.0f;
+        controller->ramped_turntable = 0.0f;
+        return;
+    }
+
+    /* 先扩展到32位，保证-32768的绝对值也能正确判断。 */
+    int32_t current = controller->turntable_feedback.current;
+    if (current < 0) current = -current;
+    if (current < g_feed_stall_current_threshold || controller->ramped_turntable <= 0.0f) {
+        recovery->high_current_active = false;
+        return;
+    }
+    /* 长时间未执行控制不算连续观测，恢复后重新计时。 */
+    if (!recovery->high_current_active ||
+        now_ms - recovery->last_check_ms > MOTOR_FEEDBACK_TIMEOUT_MS) {
+        recovery->high_current_active = true;
+        recovery->high_current_since_ms = now_ms;
+    }
+    recovery->last_check_ms = now_ms;
+    if (now_ms - recovery->high_current_since_ms < FEED_STALL_DURATION_MS) return;
+
+    recovery->high_current_active = false;
+    ResetFeedPid(controller);
+    if (recovery->reverse_attempted) {
+        recovery->state = FEED_RECOVERY_BLOCKED;
+        controller->turntable_target = 0.0f;
+        controller->ramped_turntable = 0.0f;
+    } else {
+        recovery->state = FEED_RECOVERY_REVERSING;
+        recovery->reverse_attempted = true;
+        recovery->reverse_since_ms = now_ms;
+        controller->turntable_target = -FEED_REVERSE_SPEED_RPM;
+        controller->ramped_turntable = controller->turntable_target;
+    }
 }
 
 static int16_t ComputeSingleMotorCurrent(PID_Controller *pid, float target, Motor_Feedback *feedback, uint32_t current_tick)
@@ -115,6 +197,7 @@ void ShooterController_Update(ShooterController *controller, SensorData* sensor_
 {
     if (controller == NULL) return;
     (void)sensor_data;  // Not needed anymore
+    if (!s_last_cmd.feed_enabled) CancelFeedRecovery(controller);
     
     controller->feedback_fault = !ShooterFeedbackHealthy(controller, BspTime_NowMs());
     if (controller->feedback_fault || !BspCan_OutputsArmed()) {
@@ -124,10 +207,6 @@ void ShooterController_Update(ShooterController *controller, SensorData* sensor_
 
     // Use standardized command from cmd_controller
     controller->enabled = s_last_cmd.friction_enabled;
-    if (!s_last_cmd.feed_enabled) {
-        controller->ramped_turntable = 0.0f;
-        PID_Reset(&controller->turntable_pid);
-    }
     
     // Set turntable target (only feed when feed_enabled)
     float turntable_target = s_last_cmd.feed_enabled ? MOTOR5_CONST_SPEED : 0.0f;
@@ -137,12 +216,14 @@ void ShooterController_Update(ShooterController *controller, SensorData* sensor_
     float shooter1_target = friction_requested ? -SHOOTER_CONST_SPEED : 0.0f;
     float shooter2_target = friction_requested ?  SHOOTER_CONST_SPEED : 0.0f;
     
-    controller->turntable_target = turntable_target;
+    if (controller->feed_recovery.state == FEED_RECOVERY_MONITORING) {
+        controller->turntable_target = turntable_target;
+        controller->ramped_turntable = RampTowards(controller->ramped_turntable, turntable_target, SHOOTER_RAMP_STEP);
+    }
     controller->shooter1_target = shooter1_target;
     controller->shooter2_target = shooter2_target;
 
     // Apply ramping
-    controller->ramped_turntable = RampTowards(controller->ramped_turntable, turntable_target, SHOOTER_RAMP_STEP);
     controller->ramped_shooter1 = RampTowards(controller->ramped_shooter1, shooter1_target, SHOOTER_RAMP_STEP);
     controller->ramped_shooter2 = RampTowards(controller->ramped_shooter2, shooter2_target, SHOOTER_RAMP_STEP);
 }
@@ -152,14 +233,19 @@ void ShooterController_ComputeCurrents(ShooterController *controller, uint32_t c
     if (controller == NULL) return;
 
     /* 独立检查计算入口，调用者跳过Update也不能沿用旧电流。 */
+    if (!s_last_cmd.feed_enabled) CancelFeedRecovery(controller);
     controller->feedback_fault = !ShooterFeedbackHealthy(controller, current_tick);
     if (controller->feedback_fault || !BspCan_OutputsArmed()) {
         ShooterController_Stop(controller);
         return;
     }
 
-    // Compute currents for each shooter motor
-    controller->output_currents[0] = s_last_cmd.feed_enabled ? ComputeSingleMotorCurrent(&controller->turntable_pid, controller->ramped_turntable, &controller->turntable_feedback, current_tick) : 0;
+    if (s_last_cmd.feed_enabled) UpdateFeedRecovery(controller, current_tick);
+
+    /* 反转结束/重堵/取消时直接零电流；摩擦轮继续使用原来的斜坡和零速闭环。 */
+    controller->output_currents[0] = s_last_cmd.feed_enabled && controller->ramped_turntable != 0.0f
+        ? ComputeSingleMotorCurrent(&controller->turntable_pid, controller->ramped_turntable,
+                                    &controller->turntable_feedback, current_tick) : 0;
     /* Keep the original zero-speed loop active after the ramp reaches zero. */
     controller->output_currents[1] = BspCan_OutputsArmed() ? ComputeSingleMotorCurrent(&controller->shooter1_pid, controller->ramped_shooter1, &controller->shooter1_feedback, current_tick) : 0;
     controller->output_currents[2] = 0;  // Not used
@@ -200,6 +286,10 @@ void ShooterController_Stop(ShooterController *controller)
     controller->ramped_shooter1 = 0.0f;
     controller->ramped_shooter2 = 0.0f;
     controller->ramped_yaw = 0.0f;
+    controller->feed_recovery.high_current_active = false;
+    if (controller->feed_recovery.state == FEED_RECOVERY_REVERSING) {
+        controller->feed_recovery.state = FEED_RECOVERY_MONITORING;
+    }
     PID_Reset(&controller->turntable_pid);
     PID_Reset(&controller->shooter1_pid);
     PID_Reset(&controller->shooter2_pid);
@@ -233,6 +323,10 @@ void ShooterController_UpdateMotorFeedback(ShooterController *controller, uint8_
     if (motor_id == s_feed_motor_id) {
         feedback = &controller->turntable_feedback;
         controller->feedback_seen[0] = true;
+        /* 即使同轮派发稍后又来高电流，已观测到的低电流也会打断连续计时。 */
+        if (current > -g_feed_stall_current_threshold && current < g_feed_stall_current_threshold) {
+            controller->feed_recovery.high_current_active = false;
+        }
     }
     else if (motor_id == s_friction1_motor_id) {
         feedback = &controller->shooter1_feedback;

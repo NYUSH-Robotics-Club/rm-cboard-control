@@ -77,6 +77,8 @@ int main(void)
     assert(pitch->limits.gm6020.angle_min == 1566.0f);
     assert(pitch->limits.gm6020.angle_max == 2205.0f);
     assert(pitch->limits.gm6020.initial_angle == 1971.0f);
+    assert(pitch->limits.gm6020.gravity_zero_angle == 1971.0f);
+    assert(!pitch->limits.gm6020.enable_yaw_pitch_compensation);
 #endif
     return 0;
 }

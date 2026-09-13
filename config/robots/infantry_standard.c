@@ -8,6 +8,11 @@
  * pitch原重力补偿单独叠加，勿用bias重复补偿；失联或参数非法时双轴停止。
  * pitch限位填写绝对编码：angle_min=1566（最高），angle_max=2205（最低）。
  * initial_angle=1971为启动/重新对齐目标；必须在限位内，负数改为锁存当前位置。
+ * gravity_zero_angle=1971为重力正弦项零点（绝对编码），独立于启动目标：
+ *   gravity_ff = direction * gravity_compensation * sin((raw - gravity_zero_angle) * 2π / 8192)。
+ * 在该零点重力项为0；gravity_compensation填原始命令幅值，0关闭重力项。
+ * pitch的enable_yaw_pitch_compensation=false关闭yaw转动对pitch目标的改写。
+ * true恢复旧耦合算法（机械模型未验证）；该开关独立于重力补偿，自瞄仍禁用耦合。
  * offline_alarm_id填写电调硬件ID：红灯按该数闪烁，每组之后蓝灯分隔；
  * 蜂鸣次数取CAN总线号（CAN1一次、CAN2两次），不是0x201等报文ID。
  */
@@ -20,9 +25,9 @@ static const ChassisFollowConfig s_chassis_follow = {
 
 /* 手动输入按度/秒积分；普通推杆与回中共用限速。 */
 static const YawControlConfig s_yaw_control = {
-    .manual_rate_deg_s = 60.0f,
-    .target_lead_deg = 10.0f,
-    .manual_speed_rpm = 10.0f,
+    .manual_rate_deg_s = 100.0f,
+    .target_lead_deg = 30.0f,
+    .manual_speed_rpm = 30.0f,
     .vision_speed_rpm = 10.0f,
     .spin_speed_rpm = 10.0f,
     .speed_loop_only = true /* 步兵暂时旁路位置环；哨兵保留串级。 */
@@ -177,11 +182,11 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                 .gravity_compensation = 0.0f,
                 .initial_angle = -1.0f // Auto-initialize from current position (no startup vibration)
             },
-        .protocol.dji = {GM6020_COMMAND_CURRENT, 10000}, // 电流原始刻度，5460 约为 1 A。
+        .protocol.dji = {GM6020_COMMAND_CURRENT, 12000}, // 电流原始刻度，5460 约为 1 A。
         // 位置环参数保留；speed_loop_only=true时不执行，恢复后输出仍受模式限速。
-        .pid_outer = {1.0f, 0.0f, 0.0f, 50000.0f, 0.0f},
+        .pid_outer = {1.0f, 0.0f, 0.0f, 12000.0f, 0.0f},
         // 速度误差为RPM、输出为电流原始刻度；保留当前用户PID，反馈失联仍归零。
-        .pid_inner = {700.0f, 0.0f, 0.0f, 10000.0f, 2000.0f}
+        .pid_inner = {35.0f, 0.0f, 1.0f, 6000.0f, 2000.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。
@@ -202,8 +207,10 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                 .angle_min = 1566.0f, // 实测最高位置；抬头时编码减小。
                 .angle_max = 2205.0f, // 实测最低位置。
                 .gravity_compensation =
-                    5000.0f,             // Gravity compensation for pitch
-                .initial_angle = 1971.0f // 用户确认的初始位置，等待真实反馈后再闭环。
+                    0.0f,             // Gravity compensation for pitch
+                .initial_angle = 1971.0f, // 用户确认的初始位置，等待真实反馈后再闭环。
+                .gravity_zero_angle = 1971.0f, // 用户标定的重力机械零点，单位为编码器刻度。
+                .enable_yaw_pitch_compensation = false // 关闭yaw对pitch目标的耦合改写。
             },
         .pid_outer = {5.0f, 0.0f, 0.1f, 10000.0f, 15000.0f}, // Pitch PID (aggressive: high Kp, low Kd for fast tracking)
         .pid_inner = {2.0f, 0.0f, 0.0f, 10000.0f, 0.0f}

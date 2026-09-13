@@ -1,6 +1,6 @@
 /*
  * 声明发射机构控制器。
- * 目标速度使用 RPM，反馈时间使用毫秒，输出为电流命令。
+ * 目标速度使用转子 RPM，反馈时间使用毫秒，输出为电流命令；不处理电机协议。
  */
 #ifndef SHOOTER_CONTROLLER_H
 #define SHOOTER_CONTROLLER_H
@@ -19,6 +19,34 @@
 #define SHOOTER_CONST_SPEED 7500     // Shooter wheel speed
 #define SHOOTER_RAMP_STEP 500.0f      // Acceleration step
 
+/* 拨弹堵转初调值，尚未实车标定；电流用反馈原始刻度，不是安培。
+ * 当前拨弹1000 RPM、Kp=1，静止比例输出约1000，故先取800作检测门槛。
+ * 仅按持续高电流判断，不要求低转速；一次拨弹最多反转一次，重堵等待松开。
+ */
+/* 应用共享可调变量，定义在shooter_controller.c；范围1..32767原始刻度。
+ * 仅在取消拨弹后由主循环修改；不在中断中写入。非正值使拨盘锁定停机，
+ * 修正后取消拨弹才能解锁。修改初始值须重新构建/烧录，运行时赋值不持久保存。
+ */
+extern int16_t g_feed_stall_current_threshold;
+#define FEED_STALL_DURATION_MS 500U
+#define FEED_REVERSE_SPEED_RPM 500.0f /* 正值幅度，实际目标与正常拨弹方向相反。 */
+#define FEED_REVERSE_DURATION_MS 200U
+
+typedef enum {
+    FEED_RECOVERY_MONITORING = 0,
+    FEED_RECOVERY_REVERSING,
+    FEED_RECOVERY_BLOCKED /* 再次持续高电流，拨盘零电流直到取消拨弹。 */
+} FeedRecoveryState;
+
+/* 由各控制器独占；所有时间为可回绕的uint32毫秒，计时有效位独立于零时刻。 */
+typedef struct {
+    FeedRecoveryState state;
+    bool reverse_attempted; /* 停机/失联取消动作但不补发次数；取消拨弹后清除。 */
+    bool high_current_active;
+    uint32_t high_current_since_ms;
+    uint32_t last_check_ms;
+    uint32_t reverse_since_ms;
+} FeedRecovery;
 
 // Shooter controller structure
 typedef struct {
@@ -37,6 +65,7 @@ typedef struct {
     bool enabled;
     bool feedback_seen[3]; /* 拨盘、左摩擦轮、右摩擦轮；收到过反馈后置true。 */
     bool feedback_fault;   /* 缺配置/首帧或任一反馈超过100ms，整个发射机构禁止出力。 */
+    FeedRecovery feed_recovery;
     
     // PID controllers (turntable and shooter wheels)
     PID_Controller turntable_pid;
@@ -89,7 +118,8 @@ void ShooterController_SetTurntableSpeed(ShooterController *controller, float sp
 void ShooterController_SetShooterSpeeds(ShooterController *controller, float shooter1_speed, float shooter2_speed);
 
 /**
- * @brief 三台电机零命令，清目标/斜坡和全部PID历史；不清有效反馈。
+ * @brief 三台电机零命令，清目标/斜坡、堵转计时和全部PID历史；不清有效反馈。
+ * 已用反转次数和重堵锁定保留，取消拨弹才解锁，避免失联恢复后反复尝试。
  * @param controller Shooter controller pointer
  */
 void ShooterController_Stop(ShooterController *controller);

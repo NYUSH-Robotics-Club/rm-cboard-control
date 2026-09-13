@@ -11,6 +11,21 @@ static bool s_mode_override_valid[16];
 static MotorControlMode_e s_mode_override[16];
 static bool s_initialized;
 
+MotorCommandUnit MotorService_GetCommandUnit(uint8_t motor_id)
+{
+    const MotorConfig_t *config = MotorService_GetConfig(motor_id);
+    if (!config || config->vendor != MOTOR_VENDOR_DJI)
+        return MOTOR_COMMAND_UNIT_UNKNOWN;
+    if (config->type == MOTOR_TYPE_M3508 || config->type == MOTOR_TYPE_M2006)
+        return MOTOR_COMMAND_UNIT_CURRENT_COUNTS;
+    if (config->type != MOTOR_TYPE_GM6020) return MOTOR_COMMAND_UNIT_UNKNOWN;
+    switch (config->protocol.dji.gm6020_mode) {
+        case GM6020_COMMAND_CURRENT: return MOTOR_COMMAND_UNIT_CURRENT_COUNTS;
+        case GM6020_COMMAND_VOLTAGE: return MOTOR_COMMAND_UNIT_VOLTAGE_COUNTS;
+        default: return MOTOR_COMMAND_UNIT_UNKNOWN;
+    }
+}
+
 enum { MOTOR_ADAPTER_COUNT = 4U };
 
 static const MotorAdapterOps *adapter_at(size_t index)

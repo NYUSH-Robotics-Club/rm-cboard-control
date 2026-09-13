@@ -3,6 +3,7 @@
  * 电机编号和参数来自机器人配置，不在这里拼接 CAN 数据。
  */
 #include "gimbal_controller.h"
+#include "gimbal_monitor.h"
 #include "yaw_reference.h"
 #include "message_center.h"
 #include "motor_driver.h"
@@ -13,6 +14,15 @@
 #include "bsp_time.h"
 #include <math.h>
 #include <string.h>
+#include <stdatomic.h>
+
+volatile GimbalMonitorSnapshot g_gimbal_monitor;
+_Static_assert(sizeof(GimbalMonitorAxis) == 56U, "monitor axis ABI");
+_Static_assert(sizeof(GimbalMonitorSnapshot) == 148U, "monitor snapshot ABI");
+
+/* 暂存本次服务请求；每次有效命令回调先清空，停机分支也会记录零命令及状态。 */
+static int16_t s_monitor_commands[2];
+static RobotStatus s_monitor_status[2];
 
 // Motor IDs (dynamically assigned during init)
 static uint8_t s_pitch_motor_id = 0xFF;
@@ -23,6 +33,13 @@ static YawReference s_yaw_reference;
 static YawControlMode s_yaw_mode;
 static bool s_yaw_mode_valid;
 static float s_spin_turn_offset_deg;
+
+static void command_axis(uint8_t id, int16_t command) {
+  RobotStatus status = MotorService_CommandCurrent(id, command);
+  unsigned axis = id == s_yaw_motor_id ? 0U : 1U;
+  s_monitor_commands[axis] = command;
+  s_monitor_status[axis] = status;
+}
 
 // Gimbal tilt compensation parameters
 #define GIMBAL_HEIGHT_CM (30.0f)  // 云台距地面高度 30cm
@@ -145,10 +162,8 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
   float sensitivity = 60.0f; // Increased for more responsive tracking
   c->angle_target += c->config->direction * sensitivity * rate_normalized;
 
-  // === Pitch补偿：补偿yaw旋转带来的pitch耦合效应 ===
-  // 当yaw旋转时，如果pitch有角度，会产生pitch方向的视觉偏移
-  // 补偿公式：Δpitch = sin(Δyaw) * tan(pitch)
-  // 自瞄时禁用此补偿，因为视觉系统不控制pitch，避免干扰
+  /* 旧视线耦合模型需按机械结构验证，只在配置显式开启且非自瞄时改写目标。
+   * 关闭时仍跟踪相邻yaw反馈，避免重新开启时补算关闭期间的累计转角。 */
   if (yaw && yaw->angle_initialized) {
     uint32_t current_time = BspTime_NowMs();
     float current_yaw_angle = (float)yaw->angle_raw;
@@ -169,7 +184,8 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
       }
 
       // 只有当yaw有显著变化且时间间隔合理时才计算补偿
-      if (!disable_yaw_pitch_compensation && fabsf(yaw_delta) > 1.0f &&
+      if (c->config->limits.gm6020.enable_yaw_pitch_compensation &&
+          !disable_yaw_pitch_compensation && fabsf(yaw_delta) > 1.0f &&
           (current_time - s_last_coupling_yaw_time_ms) > 0U) {
         // 获取当前pitch角度
         // 编码器一圈始终8192刻度，与机械限位及其开关无关。
@@ -227,7 +243,9 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
             + feedforward;
 
   if (is_pitch_motor) {
-    float ang01 = current_angle / max_encoder;
+    /* 重力相位使用配置的机械零点；非有限配置沿用下方双轴停机路径。 */
+    float ang01 = (current_angle - c->config->limits.gm6020.gravity_zero_angle) /
+                  max_encoder;
     float ang_rad = ang01 * (2.0f * (float)M_PI);
     float gravity_ff = c->config->direction *
                        c->config->limits.gm6020.gravity_compensation *
@@ -403,6 +421,10 @@ void GimbalController_CalculateAndDisplayCompensation(void) {
   if (!pitch || !pitch->angle_initialized || !yaw || !yaw->angle_initialized) {
     return;
   }
+  /* 配置关闭时不计算或显示旧耦合模型，避免误认为仍在应用补偿。 */
+  if (!pitch->config || !pitch->config->limits.gm6020.enable_yaw_pitch_compensation) {
+    return;
+  }
 
   // 计算当前pitch角度（弧度）
   const float max_encoder_pitch = 8192.0f;
@@ -486,7 +508,7 @@ void GimbalController_CalculateAndDisplayCompensation(void) {
 }
 
 // Application layer: Message subscription callbacks
-static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
+static void process_gimbal_cmd(const MsgEvent *ev, void *user) {
   (void)user;
   if (ev->size == sizeof(GimbalCmd)) {
     memcpy(&s_last_cmd, ev->data, sizeof(GimbalCmd));
@@ -533,16 +555,16 @@ static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
           motor->angle_target = (float)motor->angle_raw;
         }
         s_coupling_history_valid = false;
-        (void)MotorService_CommandCurrent(s_pitch_motor_id, 0);
-        (void)MotorService_CommandCurrent(s_yaw_motor_id, 0);
+        command_axis(s_pitch_motor_id, 0);
+        command_axis(s_yaw_motor_id, 0);
         return;
       }
       // 计算并显示云台倾斜角度补偿（每100ms更新一次）
       GimbalController_CalculateAndDisplayCompensation();
 
       // Send motor currents (buffered, will be flushed by message center)
-      (void)MotorService_CommandCurrent(s_pitch_motor_id, pitch_current);
-      (void)MotorService_CommandCurrent(s_yaw_motor_id, yaw_current);
+      command_axis(s_pitch_motor_id, pitch_current);
+      command_axis(s_yaw_motor_id, yaw_current);
     } else {
       /* Forget old hold targets/integrals; reconnection captures the current angles. */
       uint8_t ids[2] = {s_pitch_motor_id, s_yaw_motor_id};
@@ -556,8 +578,8 @@ static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
       s_yaw_reference.valid = false;
       s_yaw_mode_valid = false;
       s_coupling_history_valid = false;
-      (void)MotorService_CommandCurrent(s_pitch_motor_id, 0);
-      (void)MotorService_CommandCurrent(s_yaw_motor_id, 0);
+      command_axis(s_pitch_motor_id, 0);
+      command_axis(s_yaw_motor_id, 0);
     }
 
     // Gimbal position logging (20Hz rate limited in main.c)
@@ -586,6 +608,71 @@ static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
     //           pitch_ctx->angle_target);
     // }
   }
+}
+
+/* 从派发上下文中的电机反馈快照复制；IRQ不写这些兼容上下文。 */
+static GimbalMonitorAxis monitor_axis(uint8_t id, unsigned index, bool active) {
+  GimbalMonitorAxis axis = {0};
+  MotorContext_t *motor = MotorDriver_GetContext(id);
+  axis.motor_id = id;
+  axis.command_status = s_monitor_status[index];
+  axis.command_raw = s_monitor_commands[index];
+  axis.command_unit = MotorService_GetCommandUnit(id);
+  if (!motor || !motor->initialized) return axis;
+  axis.flags = GIMBAL_MONITOR_PRESENT;
+  if (motor->last_feedback_time != 0U) axis.flags |= GIMBAL_MONITOR_FEEDBACK_SEEN;
+  if (axis_feedback_fresh(id, BspTime_NowMs())) axis.flags |= GIMBAL_MONITOR_FEEDBACK_FRESH;
+  active = active && axis.command_status == ROBOT_STATUS_OK;
+  if (active) axis.flags |= GIMBAL_MONITOR_CONTROL_ACTIVE;
+  bool yaw = index == 0U;
+  bool speed_only = yaw && motor->config && motor->config->yaw_control &&
+                    motor->config->yaw_control->speed_loop_only;
+  if (active && !speed_only) axis.flags |= GIMBAL_MONITOR_POSITION_ACTIVE;
+  if (yaw && active && s_yaw_mode == YAW_CONTROL_SPIN)
+    axis.flags |= GIMBAL_MONITOR_SPEED_IMU;
+  axis.feedback_ms = motor->last_feedback_time;
+  axis.encoder_raw = motor->angle_raw;
+  axis.current_actual_raw = motor->feedback_current;
+  axis.position_actual_ticks = yaw && s_yaw_reference.valid ?
+      s_yaw_reference.position_ticks : (float)motor->angle_raw;
+  axis.position_target_ticks = yaw && s_yaw_reference.valid ?
+      s_yaw_reference.target_ticks : motor->angle_target;
+  axis.speed_actual_rpm = motor->speed_rpm;
+  /* PID_Reset保留target/actual，禁用时不能把它们冒充当前有效目标。 */
+  axis.speed_target_rpm = active ? motor->pid_inner.target : 0.0f;
+  axis.speed_loop_actual_rpm = active ? motor->pid_inner.actual : 0.0f;
+  axis.speed_loop_dt_s = active ? motor->pid_inner.dt : 0.0f;
+  return axis;
+}
+
+static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
+  if (!ev || ev->size != sizeof(GimbalCmd)) return;
+  for (unsigned i = 0; i < 2U; ++i) {
+    s_monitor_commands[i] = 0;
+    s_monitor_status[i] = ROBOT_STATUS_NOT_READY;
+  }
+  process_gimbal_cmd(ev, user);
+  uint32_t now = BspTime_NowMs();
+  bool active = s_last_cmd.enabled && s_startup_position_captured && s_yaw_reference.valid;
+  GimbalMonitorSnapshot next = {0};
+  next.magic = 0x474D4F4EU;
+  next.version = 1U;
+  next.size_bytes = sizeof(next);
+  next.callback_count = g_gimbal_monitor.callback_count + 1U;
+  next.tick_ms = now;
+  next.callback_dt_ms = g_gimbal_monitor.callback_count ? now - g_gimbal_monitor.tick_ms : 0U;
+  next.enabled = s_last_cmd.enabled;
+  next.startup_ready = s_startup_position_captured;
+  next.yaw = monitor_axis(s_yaw_motor_id, 0U, active);
+  next.pitch = monitor_axis(s_pitch_motor_id, 1U, active);
+  /* Cortex-M4无数据缓存；编译屏障和volatile发布顺序供运行中SWD重读校验。 */
+  uint32_t odd = g_gimbal_monitor.sequence + 1U;
+  next.sequence = odd;
+  g_gimbal_monitor.sequence = odd;
+  atomic_signal_fence(memory_order_seq_cst);
+  g_gimbal_monitor = next;
+  atomic_signal_fence(memory_order_seq_cst);
+  g_gimbal_monitor.sequence = odd + 1U;
 }
 
 static void on_imu_update(const MsgEvent *ev, void *user) {

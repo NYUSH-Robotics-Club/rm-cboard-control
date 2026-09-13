@@ -492,9 +492,22 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["--just"]:
         argv = shlex.split(argv[1])
+    if argv[:1] == ["monitor"]:
+        import gimbal_monitor
+        try:
+            gimbal_monitor.main(argv[1:])
+        except KeyboardInterrupt:
+            print("\n监控已停止，CSV已保存。")
+        except gimbal_monitor.fw.Failure as exc:
+            # Direct execution loads this file as __main__; normalize exception ownership.
+            raise Failure(str(exc)) from exc
+        except subprocess.SubprocessError as exc:
+            raise Failure(f"Monitor subprocess failed: {exc}") from exc
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("help")
+    sub.add_parser("monitor", help="Read yaw/pitch snapshots; use monitor --help for options")
     p = sub.add_parser("configure")
     p.add_argument("robot", choices=ROBOTS)
     p.add_argument("--mode", choices=("Debug", "Release"), default="Debug")

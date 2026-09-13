@@ -45,6 +45,14 @@ RobotStatus MotorService_SetControlMode(uint8_t motor_id,
 RobotStatus MotorService_ClearControlModeOverride(uint8_t motor_id);
 MotorControlMode_e MotorService_GetControlMode(uint8_t motor_id);
 
+/* 原始命令的物理种类，不提供安培/伏特换算；未知协议或编号返回UNKNOWN。 */
+typedef enum {
+    MOTOR_COMMAND_UNIT_UNKNOWN = 0,
+    MOTOR_COMMAND_UNIT_CURRENT_COUNTS = 1,
+    MOTOR_COMMAND_UNIT_VOLTAGE_COUNTS = 2
+} MotorCommandUnit;
+MotorCommandUnit MotorService_GetCommandUnit(uint8_t motor_id);
+
 bool MotorService_IsVendorImplemented(MotorVendor_e vendor);
 const char *MotorService_VendorName(MotorVendor_e vendor);
 void MotorService_Flush(void);
