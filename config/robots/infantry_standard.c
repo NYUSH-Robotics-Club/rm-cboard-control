@@ -184,9 +184,9 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
             },
         .protocol.dji = {GM6020_COMMAND_CURRENT, 12000}, // 电流原始刻度，5460 约为 1 A。
         // 位置环参数保留；speed_loop_only=true时不执行，恢复后输出仍受模式限速。
-        .pid_outer = {1.0f, 0.0f, 0.0f, 12000.0f, 0.0f},
+        .pid_outer = {10.0f, 0.0f, 0.0f, 12000.0f, 0.0f},
         // 速度误差为RPM、输出为电流原始刻度；保留当前用户PID，反馈失联仍归零。
-        .pid_inner = {35.0f, 0.0f, 1.0f, 6000.0f, 2000.0f}
+        .pid_inner = {300.0f, 0.0f, 0.0f, 6000.0f, 0.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。
@@ -212,8 +212,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                 .gravity_zero_angle = 1971.0f, // 用户标定的重力机械零点，单位为编码器刻度。
                 .enable_yaw_pitch_compensation = false // 关闭yaw对pitch目标的耦合改写。
             },
-        .pid_outer = {5.0f, 0.0f, 0.1f, 10000.0f, 15000.0f}, // Pitch PID (aggressive: high Kp, low Kd for fast tracking)
-        .pid_inner = {2.0f, 0.0f, 0.0f, 10000.0f, 0.0f}
+        .pid_outer = {1.0f, 0.0f, 0.1f, 10000.0f, 15000.0f}, // Pitch PID (aggressive: high Kp, low Kd for fast tracking)
+        .pid_inner = {10.0f, 0.0f, 0.0f, 10000.0f, 0.0f}
     }};
 
 /* 用户确认：X形±45°，前后/左右轮中心距均0.54m，轮半径0.07m，M3508 P19。
