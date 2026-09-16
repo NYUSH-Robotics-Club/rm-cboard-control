@@ -72,6 +72,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Src/buzzer.c
+    third_party/SEGGER/RTT/SEGGER_RTT.c
 )
 
 # Add include paths
@@ -111,10 +112,13 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     application/gimbal
     application/cmd
     application/diagnostics
+    application/dashboard
     Drivers/CMSIS/Include
     Drivers/CMSIS/Device/ST/STM32F4xx/Include
     Drivers/STM32F4xx_HAL_Driver/Inc
     Middlewares/ST/ARM/DSP/Include
+    third_party/SEGGER/RTT
+    third_party/SEGGER/Config
 )
 
 # Add project symbols (macros) for executable
@@ -247,6 +251,8 @@ target_include_directories(modules PUBLIC
     Drivers/CMSIS/Device/ST/STM32F4xx/Include
     Drivers/STM32F4xx_HAL_Driver/Inc
     Middlewares/ST/ARM/DSP/Include
+    third_party/SEGGER/RTT
+    third_party/SEGGER/Config
 )
 
 set_property(SOURCE
@@ -331,6 +337,7 @@ set(APPLICATION_SOURCES
     application/shoot/shooter_controller.c
     application/gimbal/gimbal_controller.c
     application/gimbal/yaw_reference.c
+    application/dashboard/dashboard.c
 )
 
 # Pick ONE chassis implementation based on ROBOT_TYPE
@@ -364,6 +371,7 @@ target_include_directories(application PUBLIC
     application
     application/cmd
     application/diagnostics
+    application/dashboard
     application/runtime
     application/chassis
     application/shoot

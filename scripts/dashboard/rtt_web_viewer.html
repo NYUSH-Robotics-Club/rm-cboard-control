@@ -1,0 +1,2139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RTT Telemetry Dashboard</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      :root {
+        --bg: #f2f6f6;
+        --panel: #ffffff;
+        --ink: #0f2430;
+        --muted: #55656d;
+        --grid: #d7e3e8;
+        --ok: #1f8f57;
+        --line-a: #0f766e;
+        --line-b: #b54708;
+        --line-c: #1d4ed8;
+        --line-d: #a21caf;
+        --line-e: #475569;
+        --bg-gradient-1: #d9ece7;
+        --bg-gradient-2: #f7e7d8;
+        --border: #d4e1e6;
+        --border-subtle: #e7eef1;
+        --canvas-bg: #fff;
+        --canvas-grid: #d7e3e8;
+        --canvas-axis: #c2d5de;
+        --canvas-axis-text: #61737d;
+        --canvas-hover: #274d5b;
+        --pill-border: #d4e1e6;
+        --pill-good-border: #8ad0a8;
+        --pill-good-bg: #ecfbf2;
+        --pill-good-text: #0f6a3a;
+        --pill-bad-border: #efb3b3;
+        --pill-bad-bg: #fff2f2;
+        --pill-bad-text: #9f1e1e;
+        --tab-border: #ccdbe1;
+        --tab-bg: #f8fbfc;
+        --tab-active-border: #83a7b7;
+        --tab-active-bg: #e9f3f7;
+        --chip-border: #d8e5ea;
+        --chip-bg: #f6fafc;
+        --chip-text: #3d5561;
+        --log-bg: #071b27;
+        --log-text: #d8edf1;
+        --seg-border: #c9dbe4;
+        --seg-bg: #f7fbfd;
+        --seg-active-border: #88aec0;
+        --seg-active-bg: #e4f2f9;
+        --tooltip-bg: rgba(12, 31, 41, 0.92);
+        --tooltip-text: #e9f6f9;
+        --dialog-bg: #ffffff;
+        --dialog-backdrop: rgba(3, 18, 26, 0.4);
+        --input-border: #ccdbe1;
+        --shadow: rgba(16, 36, 48, 0.04);
+      }
+      
+      :root {
+        --bg: #0a0e12;
+        --panel: #1a1f26;
+        --ink: #e4eef3;
+        --muted: #8b9aa3;
+        --grid: #2a3440;
+        --ok: #3fb880;
+        --line-a: #34d399;
+        --line-b: #fb923c;
+        --line-c: #60a5fa;
+        --line-d: #d946ef;
+        --line-e: #94a3b8;
+        --bg-gradient-1: #0d2318;
+        --bg-gradient-2: #1a1410;
+        --border: #2e3845;
+        --border-subtle: #252c35;
+        --canvas-bg: #141921;
+        --canvas-grid: #2a3440;
+        --canvas-axis: #3d4856;
+        --canvas-axis-text: #9ba8b3;
+        --canvas-hover: #7da3b8;
+        --pill-border: #2e3845;
+        --pill-good-border: #2d5f45;
+        --pill-good-bg: #1a3329;
+        --pill-good-text: #6ee7a7;
+        --pill-bad-border: #5f2d2d;
+        --pill-bad-bg: #331a1a;
+        --pill-bad-text: #f87171;
+        --tab-border: #2e3845;
+        --tab-bg: #141921;
+        --tab-active-border: #4a6373;
+        --tab-active-bg: #1f2d3a;
+        --chip-border: #2e3845;
+        --chip-bg: #1f2630;
+        --chip-text: #b0bdc7;
+        --log-bg: #0a1116;
+        --log-text: #cbd5e1;
+        --seg-border: #2e3845;
+        --seg-bg: #141921;
+        --seg-active-border: #4a6373;
+        --seg-active-bg: #1f2d3a;
+        --tooltip-bg: rgba(240, 248, 255, 0.95);
+        --tooltip-text: #0f2430;
+        --dialog-bg: #1a1f26;
+        --dialog-backdrop: rgba(0, 0, 0, 0.6);
+        --input-border: #3d4856;
+        --shadow: rgba(0, 0, 0, 0.3);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+        background:
+          radial-gradient(1200px 700px at -10% -20%, var(--bg-gradient-1) 0%, transparent 60%),
+          radial-gradient(1200px 700px at 120% -20%, var(--bg-gradient-2) 0%, transparent 60%),
+          var(--bg);
+        transition: background 0.3s ease, color 0.3s ease;
+      }
+      .app {
+        max-width: 1480px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+      .top {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        align-items: center;
+      }
+      .title {
+        font-size: 22px;
+        font-weight: 700;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .status {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .pill {
+        border: 1px solid var(--pill-border);
+        border-radius: 999px;
+        background: var(--panel);
+        padding: 5px 10px;
+        font-size: 12px;
+      }
+      .pill-good {
+        border-color: var(--pill-good-border);
+        background: var(--pill-good-bg);
+        color: var(--pill-good-text);
+      }
+      .pill-bad {
+        border-color: var(--pill-bad-border);
+        background: var(--pill-bad-bg);
+        color: var(--pill-bad-text);
+      }
+      .ok {
+        color: var(--ok);
+        font-weight: 700;
+      }
+      .panel {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel);
+        box-shadow: 0 2px 10px var(--shadow);
+        padding: 10px;
+      }
+      .row {
+        margin-top: 12px;
+      }
+      .tabs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .tab {
+        border: 1px solid var(--tab-border);
+        background: var(--tab-bg);
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 13px;
+        cursor: pointer;
+        color: var(--ink);
+      }
+      .tab.active {
+        border-color: var(--tab-active-border);
+        background: var(--tab-active-bg);
+      }
+      .grid2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .chart-title {
+        font-weight: 700;
+      }
+      .legend {
+        display: flex;
+        gap: 10px;
+        font-size: 12px;
+        margin-top: 4px;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+      }
+      .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .legend-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+      .chart-wrap {
+        position: relative;
+      }
+      canvas {
+        width: 100%;
+        height: 250px;
+        display: block;
+      }
+      .hover-note {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .tooltip {
+        position: absolute;
+        pointer-events: none;
+        top: 8px;
+        right: 8px;
+        background: var(--tooltip-bg);
+        color: var(--tooltip-text);
+        border-radius: 8px;
+        padding: 6px 8px;
+        font-size: 12px;
+        min-width: 160px;
+      }
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .btn {
+        border: 1px solid var(--tab-border);
+        background: var(--tab-bg);
+        border-radius: 8px;
+        padding: 7px 10px;
+        font-size: 13px;
+        cursor: pointer;
+        color: var(--ink);
+      }
+      .dialog-backdrop {
+        position: fixed;
+        inset: 0;
+        background: var(--dialog-backdrop);
+        display: flex;
+        justify-content: flex-end;
+        z-index: 10;
+      }
+      .dialog {
+        width: min(420px, 100vw);
+        height: 100vh;
+        background: var(--dialog-bg);
+        border-left: 1px solid var(--border);
+        padding: 14px;
+      }
+      input[type="text"],
+      input[type="number"],
+      select {
+        width: 100%;
+        border: 1px solid var(--input-border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 14px;
+        background: var(--panel);
+        color: var(--ink);
+      }
+      .field {
+        margin-top: 12px;
+      }
+      .field:first-of-type {
+        margin-top: 0;
+      }
+      .field-label {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+      .kv-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .kv-item {
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        padding: 8px;
+      }
+      .kv-key {
+        color: var(--muted);
+        font-size: 11px;
+        margin-bottom: 2px;
+      }
+      .kv-val {
+        font-size: 13px;
+        word-break: break-all;
+      }
+      .value-chip {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 12px;
+        font-weight: 700;
+        border: 1px solid var(--chip-border);
+        background: var(--chip-bg);
+        color: var(--chip-text);
+      }
+      .value-chip.good {
+        border-color: var(--pill-good-border);
+        background: var(--pill-good-bg);
+        color: var(--pill-good-text);
+      }
+      .value-chip.bad {
+        border-color: var(--pill-bad-border);
+        background: var(--pill-bad-bg);
+        color: var(--pill-bad-text);
+      }
+      .all-groups {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .log-box {
+        margin: 0;
+        padding: 10px;
+        border-radius: 10px;
+        background: var(--log-bg);
+        color: var(--log-text);
+        overflow: auto;
+        max-height: 520px;
+        font-size: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        white-space: pre-wrap;
+      }
+      .log-line {
+        line-height: 1.4;
+      }
+      .log-toolbar {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+        align-items: center;
+      }
+      .seg {
+        border: 1px solid var(--seg-border);
+        background: var(--seg-bg);
+        border-radius: 999px;
+        padding: 5px 10px;
+        font-size: 12px;
+        cursor: pointer;
+        color: var(--ink);
+      }
+      .seg.active {
+        background: var(--seg-active-bg);
+        border-color: var(--seg-active-border);
+      }
+      @media (max-width: 1000px) {
+        .top {
+          grid-template-columns: 1fr;
+        }
+        .grid2,
+        .all-groups {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState, useLayoutEffect } = React;
+
+      const PACKET_MAGIC = 0x5753;
+      const PACKET_HEADER_SIZE = 16;
+      const STREAM_LOG = 0;
+      const STREAM_DASHBOARD = 1;
+      const MAX_LOG_LINES = 2000;
+      const LOG_TAIL_VIEW = 1200;
+      const HARD_MAX_POINTS = 12000;
+      const DEFAULT_HISTORY_WINDOW_SEC = 20;
+      const MIN_HISTORY_WINDOW_SEC = 1;
+
+      const DASHBOARD_MAGIC = 0x4452;
+      const DASHBOARD_MAGIC_ALT = 0x5244;
+      const DASHBOARD_FRAME_OVERHEAD = 10;
+      const DASHBOARD_PAYLOAD_SIZES = {
+        3: 253,
+        4: 253,
+        5: 265,
+        6: 284,
+        7: 288,
+      };
+
+      // Match firmware modules/algorithm/crc16.c (table starts with 0x0000, 0x1189, ...)
+      // This is not Modbus/IBM (0xA001) despite older helper naming.
+      function crc16Firmware(bytes, length) {
+        let crc = 0xffff;
+        for (let i = 0; i < length; i += 1) {
+          crc ^= bytes[i];
+          for (let k = 0; k < 8; k += 1) {
+            if (crc & 1) crc = (crc >>> 1) ^ 0x8408;
+            else crc >>>= 1;
+          }
+        }
+        return crc & 0xffff;
+      }
+
+      function concatUint8(a, b) {
+        if (!a || a.length === 0) return new Uint8Array(b);
+        const out = new Uint8Array(a.length + b.length);
+        out.set(a, 0);
+        out.set(b, a.length);
+        return out;
+      }
+
+      function pushBounded(arr, value, maxLen) {
+        arr.push(value);
+        if (arr.length > maxLen) {
+          arr.splice(0, arr.length - maxLen);
+        }
+      }
+
+      function clearDashboardSeries(store) {
+        store.timeline.length = 0;
+        for (const motor of store.motors) {
+          motor.target.length = 0;
+          motor.actual.length = 0;
+        }
+        for (const arr of store.imuAngle) arr.length = 0;
+        for (const arr of store.imuGyro) arr.length = 0;
+        store.yawAngle.target.length = 0;
+        store.yawAngle.actual.length = 0;
+        store.yawSpeed.target.length = 0;
+        store.yawSpeed.actual.length = 0;
+        store.pitchAngle.target.length = 0;
+        store.pitchAngle.actual.length = 0;
+        store.pitchSpeed.target.length = 0;
+        store.pitchSpeed.actual.length = 0;
+        store.vision.recvYawRad.length = 0;
+        store.vision.recvYawVelRadS.length = 0;
+        store.vision.recvPitchRad.length = 0;
+        store.vision.recvPitchVelRadS.length = 0;
+        store.vision.sendYawRad.length = 0;
+        store.vision.sendPitchRad.length = 0;
+        store.cmd.vx.length = 0;
+        store.cmd.vy.length = 0;
+        store.cmd.wz.length = 0;
+        store.referee.status.length = 0;
+        store.referee.bulletSpeed.length = 0;
+        store.referee.restHeat.length = 0;
+        store.referee.shootRate.length = 0;
+      }
+
+      function pushDashboardSample(store, latest) {
+        store.timeline.push(latest.timestamp_ms);
+        for (let i = 0; i < 4; i += 1) {
+          store.motors[i].target.push(latest.motor_target_rpm[i]);
+          store.motors[i].actual.push(latest.motor_rpm[i]);
+        }
+        for (let i = 0; i < 3; i += 1) {
+          store.imuAngle[i].push(latest.imu_angle_deg[i]);
+          store.imuGyro[i].push(latest.imu_gyro_deg_s[i]);
+        }
+        store.yawAngle.target.push(latest.gimbal_yaw_target_deg);
+        store.yawAngle.actual.push(latest.gimbal_yaw_actual_deg);
+        store.yawSpeed.target.push(latest.gimbal_yaw_target_deg_s);
+        store.yawSpeed.actual.push(latest.gimbal_yaw_actual_deg_s);
+        store.pitchAngle.target.push(latest.gimbal_pitch_target_deg);
+        store.pitchAngle.actual.push(latest.gimbal_pitch_actual_deg);
+        store.pitchSpeed.target.push(latest.gimbal_pitch_target_deg_s);
+        store.pitchSpeed.actual.push(latest.gimbal_pitch_actual_deg_s);
+        store.vision.recvYawRad.push(latest.vision_recv_yaw_raw_rad);
+        store.vision.recvYawVelRadS.push(latest.vision_recv_yaw_vel_raw_rad_s);
+        store.vision.recvPitchRad.push(latest.vision_recv_pitch_raw_rad);
+        store.vision.recvPitchVelRadS.push(latest.vision_recv_pitch_vel_raw_rad_s);
+        store.vision.sendYawRad.push(latest.vision_send_yaw_raw_rad);
+        store.vision.sendPitchRad.push(latest.vision_send_pitch_raw_rad);
+        store.cmd.vx.push(latest.chassis_cmd_vx);
+        store.cmd.vy.push(latest.chassis_cmd_vy);
+        store.cmd.wz.push(latest.chassis_cmd_wz);
+        store.referee.status.push(latest.referee_status);
+        store.referee.bulletSpeed.push(latest.shoot_bullet_speed);
+        store.referee.restHeat.push(latest.shoot_rest_heat);
+        store.referee.shootRate.push(latest.shoot_rate);
+      }
+
+      function trimLeading(arr, count) {
+        if (count > 0) arr.splice(0, count);
+      }
+
+      function trimDashboardStore(store, historyWindowMs) {
+        const timeline = store.timeline;
+        if (!timeline.length) return;
+
+        let trimCount = 0;
+        const cutoff = timeline[timeline.length - 1] - Math.max(historyWindowMs, 1);
+        while (trimCount < timeline.length && timeline[trimCount] < cutoff) {
+          trimCount += 1;
+        }
+
+        const overflowCount = Math.max(0, timeline.length - HARD_MAX_POINTS);
+        trimCount = Math.max(trimCount, overflowCount);
+        if (trimCount <= 0) return;
+
+        trimLeading(store.timeline, trimCount);
+        for (const motor of store.motors) {
+          trimLeading(motor.target, trimCount);
+          trimLeading(motor.actual, trimCount);
+        }
+        for (const arr of store.imuAngle) trimLeading(arr, trimCount);
+        for (const arr of store.imuGyro) trimLeading(arr, trimCount);
+        trimLeading(store.yawAngle.target, trimCount);
+        trimLeading(store.yawAngle.actual, trimCount);
+        trimLeading(store.yawSpeed.target, trimCount);
+        trimLeading(store.yawSpeed.actual, trimCount);
+        trimLeading(store.pitchAngle.target, trimCount);
+        trimLeading(store.pitchAngle.actual, trimCount);
+        trimLeading(store.pitchSpeed.target, trimCount);
+        trimLeading(store.pitchSpeed.actual, trimCount);
+        trimLeading(store.vision.recvYawRad, trimCount);
+        trimLeading(store.vision.recvYawVelRadS, trimCount);
+        trimLeading(store.vision.recvPitchRad, trimCount);
+        trimLeading(store.vision.recvPitchVelRadS, trimCount);
+        trimLeading(store.vision.sendYawRad, trimCount);
+        trimLeading(store.vision.sendPitchRad, trimCount);
+        trimLeading(store.cmd.vx, trimCount);
+        trimLeading(store.cmd.vy, trimCount);
+        trimLeading(store.cmd.wz, trimCount);
+        trimLeading(store.referee.status, trimCount);
+        trimLeading(store.referee.bulletSpeed, trimCount);
+        trimLeading(store.referee.restHeat, trimCount);
+        trimLeading(store.referee.shootRate, trimCount);
+      }
+
+      function formatWindowLabel(seconds) {
+        return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+      }
+
+      function formatTooltipTime(timestampMs) {
+        if (!Number.isFinite(timestampMs)) return "-";
+        return `${(timestampMs / 1000).toFixed(3)}s`;
+      }
+
+      function findClosestTimestampIndex(timestamps, target) {
+        if (!timestamps.length) return null;
+        let lo = 0;
+        let hi = timestamps.length - 1;
+        while (lo < hi) {
+          const mid = Math.floor((lo + hi) / 2);
+          if (timestamps[mid] < target) lo = mid + 1;
+          else hi = mid;
+        }
+        if (lo === 0) return 0;
+        const prev = timestamps[lo - 1];
+        const curr = timestamps[lo];
+        return Math.abs(curr - target) < Math.abs(target - prev) ? lo : lo - 1;
+      }
+
+      function drawInteractiveLines(canvas, timestamps, series, hoverIndex, historyWindowMs) {
+        const dpr = window.devicePixelRatio || 1;
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        if (!width || !height) return null;
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        const ctx = canvas.getContext("2d");
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, width, height);
+        const computedStyle = getComputedStyle(document.documentElement);
+        const canvasBg = computedStyle.getPropertyValue('--canvas-bg').trim();
+        const gridColor = computedStyle.getPropertyValue('--canvas-grid').trim();
+        const axisColor = computedStyle.getPropertyValue('--canvas-axis').trim();
+        const axisTextColor = computedStyle.getPropertyValue('--canvas-axis-text').trim();
+        const hoverColor = computedStyle.getPropertyValue('--canvas-hover').trim();
+        ctx.fillStyle = canvasBg;
+        ctx.fillRect(0, 0, width, height);
+
+        const valid = series.filter((s) => s.values.some((v) => Number.isFinite(v)));
+        if (!valid.length) return null;
+        const n = timestamps.length;
+        if (!n) return null;
+
+        let yMin = Infinity;
+        let yMax = -Infinity;
+        for (const s of valid) {
+          for (const v of s.values) {
+            if (!Number.isFinite(v)) continue;
+            if (v < yMin) yMin = v;
+            if (v > yMax) yMax = v;
+          }
+        }
+        if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) return null;
+        if (yMin === yMax) {
+          yMin -= 1;
+          yMax += 1;
+        }
+        const pad = (yMax - yMin) * 0.1;
+        yMin -= pad;
+        yMax += pad;
+
+        const left = 46;
+        const right = 10;
+        const top = 10;
+        const bottom = 30;
+        const innerW = width - left - right;
+        const innerH = height - top - bottom;
+        const rangeMs = Math.max(historyWindowMs, 1);
+        const latestTs = timestamps[n - 1];
+        const startTs = latestTs - rangeMs;
+        const xScale = (timestampMs) => left + ((timestampMs - startTs) * innerW) / rangeMs;
+        const yScale = (v) => top + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
+
+        ctx.strokeStyle = gridColor;
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 5; i += 1) {
+          const y = top + (innerH * i) / 5;
+          ctx.beginPath();
+          ctx.moveTo(left, y);
+          ctx.lineTo(left + innerW, y);
+          ctx.stroke();
+
+          const value = (yMax - ((yMax - yMin) * i) / 5).toFixed(1);
+          ctx.fillStyle = axisTextColor;
+          ctx.font = "11px sans-serif";
+          ctx.fillText(value, 4, y + 3);
+        }
+
+        for (let i = 0; i <= 4; i += 1) {
+          const t = startTs + (rangeMs * i) / 4;
+          const x = xScale(t);
+          ctx.beginPath();
+          ctx.moveTo(x, top);
+          ctx.lineTo(x, top + innerH);
+          ctx.stroke();
+
+          const ageSec = (latestTs - t) / 1000;
+          const label = i === 4 ? "now" : `-${formatWindowLabel(ageSec)}`;
+          ctx.fillStyle = axisTextColor;
+          ctx.font = "11px sans-serif";
+          const metrics = ctx.measureText(label);
+          const textX = Math.max(left, Math.min(left + innerW - metrics.width, x - metrics.width / 2));
+          ctx.fillText(label, textX, top + innerH + 16);
+        }
+
+        ctx.strokeStyle = axisColor;
+        ctx.beginPath();
+        ctx.moveTo(left, top);
+        ctx.lineTo(left, top + innerH);
+        ctx.lineTo(left + innerW, top + innerH);
+        ctx.stroke();
+
+        for (const s of valid) {
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 1.5;
+          const values = s.values;
+          let started = false;
+          ctx.beginPath();
+          for (let i = 0; i < values.length; i += 1) {
+            if (!Number.isFinite(values[i])) {
+              started = false;
+              continue;
+            }
+            const x = xScale(timestamps[i]);
+            const y = yScale(values[i]);
+            if (!started) {
+              ctx.moveTo(x, y);
+              started = true;
+            } else {
+              ctx.lineTo(x, y);
+            }
+          }
+          if (started) ctx.stroke();
+        }
+
+        if (hoverIndex !== null && hoverIndex >= 0 && hoverIndex < n) {
+          const x = xScale(timestamps[hoverIndex]);
+          ctx.strokeStyle = hoverColor;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x, top);
+          ctx.lineTo(x, top + innerH);
+          ctx.stroke();
+
+          for (const s of valid) {
+            if (hoverIndex >= s.values.length) continue;
+            if (!Number.isFinite(s.values[hoverIndex])) continue;
+            const y = yScale(s.values[hoverIndex]);
+            ctx.fillStyle = s.color;
+            ctx.beginPath();
+            ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        return { left, innerW, startTs, rangeMs, latestTs };
+      }
+
+      function LineChartPanel({ title, timestamps, series, meta, historyWindowMs }) {
+        const canvasRef = useRef(null);
+        const [hoverIndex, setHoverIndex] = useState(null);
+
+        useEffect(() => {
+          if (canvasRef.current) {
+            drawInteractiveLines(canvasRef.current, timestamps, series, hoverIndex, historyWindowMs);
+          }
+        }, [timestamps, series, hoverIndex, historyWindowMs]);
+
+        const n = timestamps.length;
+        const hoverRows =
+          hoverIndex === null
+            ? []
+            : series.map((s) => ({
+                name: s.name,
+                value:
+                  hoverIndex < s.values.length && Number.isFinite(s.values[hoverIndex])
+                    ? s.values[hoverIndex]
+                    : null,
+                color: s.color,
+              }));
+        const hoverTimestamp = hoverIndex === null ? null : timestamps[hoverIndex];
+
+        const onMouseMove = (event) => {
+          const canvas = canvasRef.current;
+          if (!canvas || n <= 0) return;
+          const rect = canvas.getBoundingClientRect();
+          const x = event.clientX - rect.left;
+          const left = 46;
+          const right = 10;
+          const innerW = rect.width - left - right;
+          const rangeMs = Math.max(historyWindowMs, 1);
+          const latestTs = timestamps[n - 1];
+          const startTs = latestTs - rangeMs;
+          if (x < left || x > left + innerW) {
+            setHoverIndex(null);
+            return;
+          }
+          const targetTs = startTs + ((x - left) / Math.max(innerW, 1)) * rangeMs;
+          const idx = findClosestTimestampIndex(timestamps, targetTs);
+          setHoverIndex(idx);
+        };
+
+        return (
+          <div className="panel">
+            <div className="chart-title">{title}</div>
+            <div className="legend">
+              {series.map((s, idx) => (
+                <span key={s.name} className="legend-item">
+                  <span className="legend-dot" style={{ background: s.color }} />
+                  <span>{s.name}</span>
+                </span>
+              ))}
+            </div>
+            {meta ? <div className="muted" style={{ marginBottom: 6 }}>{meta}</div> : null}
+            <div className="chart-wrap">
+              {hoverRows.length > 0 ? (
+                <div className="tooltip">
+                  <div>t: {formatTooltipTime(hoverTimestamp)}</div>
+                  {hoverRows.map((r) => (
+                    <div key={r.name} style={{ color: r.color }}>
+                      {r.name}: {r.value === null ? "-" : r.value.toFixed(3)}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <canvas
+                ref={canvasRef}
+                onMouseMove={onMouseMove}
+                onMouseLeave={() => setHoverIndex(null)}
+              />
+            </div>
+          </div>
+        );
+      }
+
+      function ansiColorFromCode(code) {
+        const colors = {
+          30: "#4b5563",
+          31: "#ef4444",
+          32: "#22c55e",
+          33: "#f59e0b",
+          34: "#3b82f6",
+          35: "#d946ef",
+          36: "#06b6d4",
+          37: "#e5e7eb",
+          90: "#94a3b8",
+          91: "#f87171",
+          92: "#4ade80",
+          93: "#facc15",
+          94: "#60a5fa",
+          95: "#e879f9",
+          96: "#22d3ee",
+          97: "#f8fafc",
+        };
+        return colors[code] || null;
+      }
+
+      function parseAnsiLine(text) {
+        const regex = /(\x1b\[[0-9;]*m)/g;
+        const parts = text.split(regex);
+        const out = [];
+        let color = null;
+        let bold = false;
+        for (const part of parts) {
+          if (!part) continue;
+          if (part.startsWith("\x1b[")) {
+            const codes = part
+              .slice(2, -1)
+              .split(";")
+              .map((s) => (s === "" ? 0 : Number(s)));
+            for (const c of codes) {
+              if (c === 0) {
+                color = null;
+                bold = false;
+              } else if (c === 1) {
+                bold = true;
+              } else {
+                const mapped = ansiColorFromCode(c);
+                if (mapped) color = mapped;
+              }
+            }
+          } else {
+            const cleaned = part.replace(/^\[[0-9;]*m/, "");
+            const defaultColor = getComputedStyle(document.documentElement).getPropertyValue('--log-text').trim();
+            out.push({
+              text: cleaned,
+              style: {
+                color: color || defaultColor,
+                fontWeight: bold ? 700 : 400,
+              },
+            });
+          }
+        }
+        const defaultColor = getComputedStyle(document.documentElement).getPropertyValue('--log-text').trim();
+        return out.length ? out : [{ text, style: { color: defaultColor } }];
+      }
+
+      const ANSI_RE = /\x1b\[[0-9;]*m/g;
+      function stripAnsi(text) {
+        return text.replace(ANSI_RE, "").replace(/^\[[0-9;]*m/, "");
+      }
+
+      function detectLogLevel(text) {
+        const t = stripAnsi(text).trimStart();
+        if (t.startsWith("E:")) return "ERROR";
+        if (t.startsWith("W:")) return "WARN";
+        if (t.startsWith("I:")) return "INFO";
+        return "OTHER";
+      }
+
+      function LogViewer({ lines }) {
+        const [levelFilter, setLevelFilter] = useState("ALL");
+        const boxRef = useRef(null);
+
+        // lines is mutated in-place upstream, so do not memoize by reference.
+        const tail = lines.slice(-LOG_TAIL_VIEW);
+        const filtered =
+          levelFilter === "ALL"
+            ? tail
+            : tail.filter((line) => detectLogLevel(line) === levelFilter);
+        const displayLines = filtered;
+
+        useLayoutEffect(() => {
+          const box = boxRef.current;
+          if (!box) return;
+          box.scrollTop = box.scrollHeight;
+        }, [lines.length, displayLines.length, levelFilter]);
+
+        return (
+          <>
+            <div className="log-toolbar">
+              {["ALL", "INFO", "WARN", "ERROR", "OTHER"].map((x) => (
+                <button
+                  key={x}
+                  className={`seg ${levelFilter === x ? "active" : ""}`}
+                  onClick={() => setLevelFilter(x)}
+                >
+                  {x}
+                </button>
+              ))}
+            </div>
+            <div className="log-box" ref={boxRef}>
+              {displayLines.map((line, i) => {
+                const segs = parseAnsiLine(line);
+                return (
+                  <div className="log-line" key={i}>
+                    {segs.map((s, j) => (
+                      <span key={j} style={s.style}>{s.text}</span>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        );
+      }
+
+      function GroupPanel({ title, items }) {
+        const renderValue = (value) => {
+          const text = String(value);
+          const up = text.toUpperCase();
+          if (up === "ON" || up === "AVAILABLE" || up === "CONNECTED") {
+            return <span className="value-chip good">{text}</span>;
+          }
+          if (up === "OFF" || up === "UNAVAILABLE" || up === "DISCONNECTED") {
+            return <span className="value-chip bad">{text}</span>;
+          }
+          return text;
+        };
+        return (
+          <div className="panel">
+            <div className="chart-title" style={{ marginBottom: 8 }}>{title}</div>
+            <div className="kv-grid">
+              {items.map((item) => (
+                <div className="kv-item" key={item.name}>
+                  <div className="kv-key">{item.name}</div>
+                  <div className="kv-val">{renderValue(item.value)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      function App() {
+        const wsDefaultUrl = new URL(location.href);
+        wsDefaultUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        wsDefaultUrl.port = "8765";
+        wsDefaultUrl.pathname = "/";
+        wsDefaultUrl.search = "";
+        wsDefaultUrl.hash = "";
+        const wsDefault = wsDefaultUrl.toString();
+        const [wsUrl, setWsUrl] = useState(wsDefault);
+        const [draftWsUrl, setDraftWsUrl] = useState(wsDefault);
+        const [settingsOpen, setSettingsOpen] = useState(false);
+        const [connected, setConnected] = useState(false);
+        const [tab, setTab] = useState("motors");
+        const [historyWindowSec, setHistoryWindowSec] = useState(() => {
+          const saved = Number(localStorage.getItem('rtt-history-window-sec'));
+          return Number.isFinite(saved) && saved >= MIN_HISTORY_WINDOW_SEC
+            ? saved
+            : DEFAULT_HISTORY_WINDOW_SEC;
+        });
+        const [draftHistoryWindowSec, setDraftHistoryWindowSec] = useState(String(historyWindowSec));
+        const [renderVersion, setRenderVersion] = useState(0);
+        const logCarryRef = useRef("");
+        const dashboardBufferRef = useRef(new Uint8Array(0));
+        const renderQueuedRef = useRef(false);
+        const historyWindowMs = historyWindowSec * 1000;
+        const historyWindowRef = useRef(historyWindowMs);
+
+        useEffect(() => {
+          historyWindowRef.current = historyWindowMs;
+          localStorage.setItem('rtt-history-window-sec', String(historyWindowSec));
+          trimDashboardStore(storeRef.current, historyWindowMs);
+          queueRender();
+        }, [historyWindowSec, historyWindowMs]);
+
+        const openSettings = () => {
+          setDraftWsUrl(wsUrl);
+          setDraftHistoryWindowSec(String(historyWindowSec));
+          setSettingsOpen(true);
+        };
+
+        const storeRef = useRef({
+          frames: 0,
+          crcError: 0,
+          syncDrop: 0,
+          seqGap: 0,
+          dashboardLocked: false,
+          lastSeq: null,
+          lastTimestampMs: null,
+          dashboardBytes: 0,
+          logBytes: 0,
+          logs: [],
+          timeline: [],
+          motors: [
+            { target: [], actual: [] },
+            { target: [], actual: [] },
+            { target: [], actual: [] },
+            { target: [], actual: [] },
+          ],
+          imuAngle: [[], [], []],
+          imuGyro: [[], [], []],
+          yawAngle: { target: [], actual: [] },
+          yawSpeed: { target: [], actual: [] },
+          pitchAngle: { target: [], actual: [] },
+          pitchSpeed: { target: [], actual: [] },
+          vision: {
+            recvYawRad: [],
+            recvYawVelRadS: [],
+            recvPitchRad: [],
+            recvPitchVelRadS: [],
+            sendYawRad: [],
+            sendPitchRad: [],
+          },
+          cmd: { vx: [], vy: [], wz: [] },
+          referee: {
+            status: [],
+            bulletSpeed: [],
+            restHeat: [],
+            shootRate: [],
+          },
+          latest: null,
+        });
+
+        const queueRender = () => {
+          if (renderQueuedRef.current) return;
+          renderQueuedRef.current = true;
+          requestAnimationFrame(() => {
+            renderQueuedRef.current = false;
+            setRenderVersion((v) => v + 1);
+          });
+        };
+
+        useEffect(() => {
+          let ws = null;
+          let reconnectTimer = null;
+          let disposed = false;
+
+          const connect = () => {
+            if (disposed) return;
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = "arraybuffer";
+            ws.onopen = () => {
+              dashboardBufferRef.current = new Uint8Array(0);
+              const store = storeRef.current;
+              store.dashboardLocked = false;
+              store.lastSeq = null;
+              store.lastTimestampMs = null;
+              setConnected(true);
+              queueRender();
+            };
+            ws.onerror = () => {
+              setConnected(false);
+              queueRender();
+            };
+            ws.onclose = () => {
+              setConnected(false);
+              queueRender();
+              if (!disposed) {
+                reconnectTimer = setTimeout(connect, 1000);
+              }
+            };
+
+            ws.onmessage = async (event) => {
+            const packetRaw = event.data instanceof ArrayBuffer ? event.data : await event.data.arrayBuffer();
+            const packet = new Uint8Array(packetRaw);
+            if (packet.length < PACKET_HEADER_SIZE) return;
+            const pdv = new DataView(packet.buffer, packet.byteOffset, packet.byteLength);
+            if (pdv.getUint16(0, true) !== PACKET_MAGIC) return;
+            const stream = pdv.getUint8(3);
+            const payloadLen = pdv.getUint32(4, true);
+            if (PACKET_HEADER_SIZE + payloadLen > packet.length) return;
+            const payload = packet.subarray(PACKET_HEADER_SIZE, PACKET_HEADER_SIZE + payloadLen);
+
+            if (stream === STREAM_LOG) {
+              const store = storeRef.current;
+              store.logBytes += payload.length;
+              const text = new TextDecoder().decode(payload);
+              const lines = (logCarryRef.current + text).split(/\r?\n/);
+              logCarryRef.current = lines.pop() || "";
+              for (const line of lines) {
+                pushBounded(store.logs, line, MAX_LOG_LINES);
+              }
+              queueRender();
+              return;
+            }
+            if (stream !== STREAM_DASHBOARD) return;
+
+            const store = storeRef.current;
+            store.dashboardBytes += payload.length;
+            dashboardBufferRef.current = concatUint8(dashboardBufferRef.current, payload);
+
+            while (dashboardBufferRef.current.length >= DASHBOARD_FRAME_OVERHEAD) {
+              const buf = dashboardBufferRef.current;
+              const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+              const magic = dv.getUint16(0, true);
+              if (magic !== DASHBOARD_MAGIC && magic !== DASHBOARD_MAGIC_ALT) {
+                store.syncDrop += 1;
+                dashboardBufferRef.current = buf.subarray(1);
+                continue;
+              }
+              const version = dv.getUint8(2);
+              const payloadSizeHeader = dv.getUint8(3);
+              const expectedPayloadSize = DASHBOARD_PAYLOAD_SIZES[version];
+              if (expectedPayloadSize === undefined || payloadSizeHeader !== (expectedPayloadSize & 0xff)) {
+                store.syncDrop += 1;
+                dashboardBufferRef.current = buf.subarray(1);
+                continue;
+              }
+              const frameSize = DASHBOARD_FRAME_OVERHEAD + expectedPayloadSize;
+              if (buf.length < frameSize) break;
+              const crcRx = dv.getUint16(frameSize - 2, true);
+              const crcCalc = crc16Firmware(buf, frameSize - 2);
+              if (crcRx !== crcCalc) {
+                store.crcError += 1;
+                dashboardBufferRef.current = buf.subarray(1);
+                continue;
+              }
+
+              if (!store.dashboardLocked) {
+                store.dashboardLocked = true;
+                store.crcError = 0;
+                store.syncDrop = 0;
+                store.seqGap = 0;
+                store.lastSeq = null;
+              }
+
+              const seq = dv.getUint32(4, true);
+
+              let offset = 8;
+              const readU8 = () => {
+                const value = dv.getUint8(offset);
+                offset += 1;
+                return value;
+              };
+              const readI16 = () => {
+                const value = dv.getInt16(offset, true);
+                offset += 2;
+                return value;
+              };
+              const readU16 = () => {
+                const value = dv.getUint16(offset, true);
+                offset += 2;
+                return value;
+              };
+              const readU32 = () => {
+                const value = dv.getUint32(offset, true);
+                offset += 4;
+                return value;
+              };
+              const readF32 = () => {
+                const value = dv.getFloat32(offset, true);
+                offset += 4;
+                return value;
+              };
+              const readF32Array = (count) => Array.from({ length: count }, () => readF32());
+              const decodeBulletSpeed = (code) => ({
+                0: 0,
+                1: 10,
+                2: 15,
+                3: 16,
+                4: 18,
+                5: 30,
+              }[code] ?? 0);
+
+              const latest = {
+                dashboard_version: version,
+                dashboard_payload_size: expectedPayloadSize,
+                dashboard_payload_len_header_low8: payloadSizeHeader,
+                dashboard_payload_len_header_matches_low8: payloadSizeHeader === (expectedPayloadSize & 0xff) ? 1 : 0,
+                seq,
+                timestamp_ms: readU32(),
+                chassis_power: readF32(),
+                chassis_volt: readF32(),
+                chassis_power_buffer_energy: 0,
+                chassis_power_budget_w: 0,
+                chassis_power_estimated_w: 0,
+                chassis_power_scale: 1,
+                chassis_power_mode_flags: 0,
+              };
+
+              if (version >= 6) {
+                latest.chassis_power_buffer_energy = readU16();
+                latest.chassis_power_budget_w = readF32();
+                latest.chassis_power_estimated_w = readF32();
+                latest.chassis_power_scale = readF32();
+                latest.chassis_power_mode_flags = readU8();
+              }
+
+              Object.assign(latest, {
+                motor_target_rpm: readF32Array(4),
+                motor_rpm: readF32Array(4),
+                imu_angle_deg: readF32Array(3),
+                imu_gyro_deg_s: readF32Array(3),
+                gimbal_yaw_target_deg: readF32(),
+                gimbal_yaw_actual_deg: readF32(),
+                gimbal_yaw_target_deg_s: readF32(),
+                gimbal_yaw_actual_deg_s: readF32(),
+                gimbal_pitch_target_deg: readF32(),
+                gimbal_pitch_actual_deg: readF32(),
+                gimbal_pitch_target_deg_s: readF32(),
+                gimbal_pitch_actual_deg_s: readF32(),
+                gimbal_cmd_yaw_deg: readF32(),
+                gimbal_cmd_pitch_deg: readF32(),
+                gimbal_cmd_chassis_rotate_wz: readF32(),
+                gimbal_yaw_encoder_raw: version >= 7 ? readU16() : 0,
+                gimbal_pitch_encoder_raw: version >= 7 ? readU16() : 0,
+              });
+
+              if (version === 7 || version === 6 || version === 5) {
+                const refereeGameStateRaw = readU8();
+                const refereeStageRemainTime = readU16();
+                const refereeRobotId = readU8();
+                const refereeRobotLevel = readU8();
+                const refereeCurrentHp = readU16();
+                const refereeMaximumHp = readU16();
+                const refereeShooterBarrelCoolingValue = readU16();
+                const refereeShooterBarrelHeatLimit = readU16();
+                const refereeChassisPowerLimit = readU16();
+                const refereePowerManagementFlags = readU8();
+                const remotePacked = readU8();
+                const motorOnlineBitmap = readU8();
+                const linkBitmapPacked = readU8();
+                const statusFlags = readU8();
+                const remoteStateFlags = readU8();
+                const rcRockerLX = readI16();
+                const rcRockerLY = readI16();
+                const rcRockerRX = readI16();
+                const rcRockerRY = readI16();
+                const rcDial = readI16();
+                const mouseX = readI16();
+                const mouseY = readI16();
+                const mouseZ = readI16();
+                const mouseButtons = readU8();
+                const keyPressedBits = readU16();
+                const modePackedLow = readU8();
+                const modePackedHigh = readU8();
+                const shootRestHeat = readU8();
+                const refereeChassisCurrent = readU16();
+                const refereeBufferEnergy = readU16();
+                const refereeShooter17mm1BarrelHeat = readU16();
+                const refereeShooter17mm2BarrelHeat = readU16();
+                const refereeShooter42mmBarrelHeat = readU16();
+                const refereeShootBulletSpeedMps = version >= 6 ? readF32() : 0;
+                const telemetryDropCount = readU32();
+                const freeHeapBytes = readU32();
+                const chassisCmdVx = readF32();
+                const chassisCmdVy = readF32();
+                const chassisCmdWz = readF32();
+                const shootRate = readF32();
+                const shootLoaderSpeedAps = readF32();
+                const shootFrictionLSpeedAps = readF32();
+                const shootFrictionRSpeedAps = readF32();
+                const visionMetaFlags = readU8();
+                const visionSpModePacked = readU8();
+
+                Object.assign(latest, {
+                  referee_game_state_raw: refereeGameStateRaw,
+                  referee_game_type: refereeGameStateRaw & 0x0f,
+                  referee_status: (refereeGameStateRaw >> 4) & 0x0f,
+                  referee_stage_remain_time: refereeStageRemainTime,
+                  referee_robot_id: refereeRobotId,
+                  referee_robot_level: refereeRobotLevel,
+                  referee_current_hp: refereeCurrentHp,
+                  referee_maximum_hp: refereeMaximumHp,
+                  referee_shooter_barrel_cooling_value: refereeShooterBarrelCoolingValue,
+                  referee_shooter_barrel_heat_limit: refereeShooterBarrelHeatLimit,
+                  referee_chassis_power_limit: refereeChassisPowerLimit,
+                  referee_power_management_flags: refereePowerManagementFlags,
+                  referee_chassis_current: refereeChassisCurrent,
+                  referee_buffer_energy: refereeBufferEnergy,
+                  referee_shooter_17mm_1_barrel_heat: refereeShooter17mm1BarrelHeat,
+                  referee_shooter_17mm_2_barrel_heat: refereeShooter17mm2BarrelHeat,
+                  referee_shooter_42mm_barrel_heat: refereeShooter42mmBarrelHeat,
+                  referee_shoot_bullet_speed_mps: refereeShootBulletSpeedMps,
+                  rc_switches: remotePacked & 0x0f,
+                  motor_online_bitmap: motorOnlineBitmap,
+                  gimbal_motor_online_bitmap: linkBitmapPacked & 0x03,
+                  shoot_motor_online_bitmap: (linkBitmapPacked >> 2) & 0x07,
+                  can_link_bitmap: (linkBitmapPacked >> 5) & 0x03,
+                  status_flags: statusFlags,
+                  remote_protocol: (remotePacked >> 4) & 0x03,
+                  remote_mode_switch: ((remotePacked >> 6) & 0x03) === 3 ? 255 : ((remotePacked >> 6) & 0x03),
+                  remote_button_bits: remoteStateFlags & 0x1f,
+                  remote_control_flags: (remoteStateFlags >> 5) & 0x07,
+                  rc_rocker_l_x: rcRockerLX,
+                  rc_rocker_l_y: rcRockerLY,
+                  rc_rocker_r_x: rcRockerRX,
+                  rc_rocker_r_y: rcRockerRY,
+                  rc_dial: rcDial,
+                  mouse_x: mouseX,
+                  mouse_y: mouseY,
+                  mouse_z: mouseZ,
+                  mouse_left: mouseButtons & 0x01,
+                  mouse_right: (mouseButtons >> 1) & 0x01,
+                  key_pressed_bits: keyPressedBits,
+                  chassis_mode: modePackedLow & 0x03,
+                  gimbal_mode: (modePackedLow >> 2) & 0x03,
+                  shoot_mode: (modePackedLow >> 4) & 0x01,
+                  shoot_load_mode: (modePackedLow >> 5) & 0x07,
+                  shoot_lid_mode: modePackedHigh & 0x01,
+                  shoot_friction_mode: (modePackedHigh >> 1) & 0x01,
+                  shoot_bullet_speed: decodeBulletSpeed((modePackedHigh >> 2) & 0x07),
+                  shoot_rest_heat: shootRestHeat,
+                  telemetry_drop_count: telemetryDropCount,
+                  free_heap_bytes: freeHeapBytes,
+                  chassis_cmd_vx: chassisCmdVx,
+                  chassis_cmd_vy: chassisCmdVy,
+                  chassis_cmd_wz: chassisCmdWz,
+                  shoot_rate: shootRate,
+                  shoot_loader_speed_aps: shootLoaderSpeedAps,
+                  shoot_friction_l_speed_aps: shootFrictionLSpeedAps,
+                  shoot_friction_r_speed_aps: shootFrictionRSpeedAps,
+                  vision_meta_flags: visionMetaFlags,
+                  vision_recv_sp_mode: visionSpModePacked & 0x0f,
+                  vision_send_sp_mode: (visionSpModePacked >> 4) & 0x0f,
+                });
+              } else if (version === 4) {
+                const refereeGameStateRaw = readU8();
+                const refereeStageRemainTime = readU16();
+                const refereeRobotId = readU8();
+                const refereeRobotLevel = readU8();
+                const refereeCurrentHp = readU16();
+                const refereeMaximumHp = readU16();
+                const refereeShooterBarrelHeatLimit = readU16();
+                const refereeChassisPowerLimit = readU16();
+                const refereePowerManagementFlags = readU8();
+                const remotePacked = readU8();
+                const motorOnlineBitmap = readU8();
+                const linkBitmapPacked = readU8();
+                const statusFlags = readU8();
+                const remoteStateFlags = readU8();
+                const rcRockerLX = readI16();
+                const rcRockerLY = readI16();
+                const rcRockerRX = readI16();
+                const rcRockerRY = readI16();
+                const rcDial = readI16();
+                const mouseX = readI16();
+                const mouseY = readI16();
+                const mouseZ = readI16();
+                const mouseButtons = readU8();
+                const keyPressedBits = readU16();
+                const modePackedLow = readU8();
+                const modePackedHigh = readU8();
+                const shootRestHeat = readU8();
+                const telemetryDropCount = readU32();
+                const freeHeapBytes = readU32();
+                const chassisCmdVx = readF32();
+                const chassisCmdVy = readF32();
+                const chassisCmdWz = readF32();
+                const shootRate = readF32();
+                const shootLoaderSpeedAps = readF32();
+                const shootFrictionLSpeedAps = readF32();
+                const shootFrictionRSpeedAps = readF32();
+                const visionMetaFlags = readU8();
+                const visionSpModePacked = readU8();
+
+                Object.assign(latest, {
+                  referee_game_state_raw: refereeGameStateRaw,
+                  referee_game_type: refereeGameStateRaw & 0x0f,
+                  referee_status: (refereeGameStateRaw >> 4) & 0x0f,
+                  referee_stage_remain_time: refereeStageRemainTime,
+                  referee_robot_id: refereeRobotId,
+                  referee_robot_level: refereeRobotLevel,
+                  referee_current_hp: refereeCurrentHp,
+                  referee_maximum_hp: refereeMaximumHp,
+                  referee_shooter_barrel_cooling_value: 0,
+                  referee_shooter_barrel_heat_limit: refereeShooterBarrelHeatLimit,
+                  referee_chassis_power_limit: refereeChassisPowerLimit,
+                  referee_power_management_flags: refereePowerManagementFlags,
+                  referee_chassis_current: 0,
+                  referee_buffer_energy: 0,
+                  referee_shooter_17mm_1_barrel_heat: 0,
+                  referee_shooter_17mm_2_barrel_heat: 0,
+                  referee_shooter_42mm_barrel_heat: 0,
+                  referee_shoot_bullet_speed_mps: 0,
+                  rc_switches: remotePacked & 0x0f,
+                  motor_online_bitmap: motorOnlineBitmap,
+                  gimbal_motor_online_bitmap: linkBitmapPacked & 0x03,
+                  shoot_motor_online_bitmap: (linkBitmapPacked >> 2) & 0x07,
+                  can_link_bitmap: (linkBitmapPacked >> 5) & 0x03,
+                  status_flags: statusFlags,
+                  remote_protocol: (remotePacked >> 4) & 0x03,
+                  remote_mode_switch: ((remotePacked >> 6) & 0x03) === 3 ? 255 : ((remotePacked >> 6) & 0x03),
+                  remote_button_bits: remoteStateFlags & 0x1f,
+                  remote_control_flags: (remoteStateFlags >> 5) & 0x07,
+                  rc_rocker_l_x: rcRockerLX,
+                  rc_rocker_l_y: rcRockerLY,
+                  rc_rocker_r_x: rcRockerRX,
+                  rc_rocker_r_y: rcRockerRY,
+                  rc_dial: rcDial,
+                  mouse_x: mouseX,
+                  mouse_y: mouseY,
+                  mouse_z: mouseZ,
+                  mouse_left: mouseButtons & 0x01,
+                  mouse_right: (mouseButtons >> 1) & 0x01,
+                  key_pressed_bits: keyPressedBits,
+                  chassis_mode: modePackedLow & 0x03,
+                  gimbal_mode: (modePackedLow >> 2) & 0x03,
+                  shoot_mode: (modePackedLow >> 4) & 0x01,
+                  shoot_load_mode: (modePackedLow >> 5) & 0x07,
+                  shoot_lid_mode: modePackedHigh & 0x01,
+                  shoot_friction_mode: (modePackedHigh >> 1) & 0x01,
+                  shoot_bullet_speed: decodeBulletSpeed((modePackedHigh >> 2) & 0x07),
+                  shoot_rest_heat: shootRestHeat,
+                  telemetry_drop_count: telemetryDropCount,
+                  free_heap_bytes: freeHeapBytes,
+                  chassis_cmd_vx: chassisCmdVx,
+                  chassis_cmd_vy: chassisCmdVy,
+                  chassis_cmd_wz: chassisCmdWz,
+                  shoot_rate: shootRate,
+                  shoot_loader_speed_aps: shootLoaderSpeedAps,
+                  shoot_friction_l_speed_aps: shootFrictionLSpeedAps,
+                  shoot_friction_r_speed_aps: shootFrictionRSpeedAps,
+                  vision_meta_flags: visionMetaFlags,
+                  vision_recv_sp_mode: visionSpModePacked & 0x0f,
+                  vision_send_sp_mode: (visionSpModePacked >> 4) & 0x0f,
+                });
+              } else {
+                Object.assign(latest, {
+                  referee_game_state_raw: 0,
+                  referee_game_type: 0,
+                  referee_status: readU8(),
+                  rc_switches: readU8(),
+                  motor_online_bitmap: readU8(),
+                  gimbal_motor_online_bitmap: readU8(),
+                  shoot_motor_online_bitmap: readU8(),
+                  status_flags: readU8(),
+                  remote_protocol: readU8(),
+                  remote_mode_switch: readU8(),
+                  remote_button_bits: readU8(),
+                  remote_control_flags: readU8(),
+                  rc_rocker_l_x: readI16(),
+                  rc_rocker_l_y: readI16(),
+                  rc_rocker_r_x: readI16(),
+                  rc_rocker_r_y: readI16(),
+                  rc_dial: readI16(),
+                  mouse_x: readI16(),
+                  mouse_y: readI16(),
+                  mouse_z: readI16(),
+                  mouse_left: readU8(),
+                  mouse_right: readU8(),
+                  key_pressed_bits: readU16(),
+                  chassis_mode: readU8(),
+                  gimbal_mode: readU8(),
+                  shoot_mode: readU8(),
+                  shoot_load_mode: readU8(),
+                  shoot_lid_mode: readU8(),
+                  shoot_friction_mode: readU8(),
+                  shoot_bullet_speed: readU8(),
+                  shoot_rest_heat: readU8(),
+                  telemetry_drop_count: readU32(),
+                  free_heap_bytes: readU32(),
+                  chassis_cmd_vx: readF32(),
+                  chassis_cmd_vy: readF32(),
+                  chassis_cmd_wz: readF32(),
+                  shoot_rate: readF32(),
+                  shoot_loader_speed_aps: readF32(),
+                  shoot_friction_l_speed_aps: readF32(),
+                  shoot_friction_r_speed_aps: readF32(),
+                  can_link_bitmap: readU8(),
+                  vision_meta_flags: readU16(),
+                  vision_recv_sp_mode: readU8(),
+                  vision_send_sp_mode: readU8(),
+                  referee_stage_remain_time: 0,
+                  referee_robot_id: 0,
+                  referee_robot_level: 0,
+                  referee_current_hp: 0,
+                  referee_maximum_hp: 0,
+                  referee_shooter_barrel_cooling_value: 0,
+                  referee_shooter_barrel_heat_limit: 0,
+                  referee_chassis_power_limit: 0,
+                  referee_power_management_flags: 0,
+                  referee_chassis_current: 0,
+                  referee_buffer_energy: 0,
+                  referee_shooter_17mm_1_barrel_heat: 0,
+                  referee_shooter_17mm_2_barrel_heat: 0,
+                  referee_shooter_42mm_barrel_heat: 0,
+                  referee_shoot_bullet_speed_mps: 0,
+                });
+                latest.referee_game_state_raw = (latest.referee_status & 0x0f) << 4;
+              }
+
+              Object.assign(latest, {
+                vision_recv_yaw_raw_rad: readF32(),
+                vision_recv_yaw_vel_raw_rad_s: readF32(),
+                vision_recv_yaw_acc_raw_rad_s2: readF32(),
+                vision_recv_pitch_raw_rad: readF32(),
+                vision_recv_pitch_vel_raw_rad_s: readF32(),
+                vision_recv_pitch_acc_raw_rad_s2: readF32(),
+                vision_send_q: readF32Array(4),
+                vision_send_yaw_raw_rad: readF32(),
+                vision_send_yaw_vel_raw_rad_s: readF32(),
+                vision_send_pitch_raw_rad: readF32(),
+                vision_send_pitch_vel_raw_rad_s: readF32(),
+                vision_send_bullet_speed_mps: readF32(),
+                vision_send_bullet_count: readU16(),
+              });
+
+              if ((store.lastSeq !== null && seq < store.lastSeq) ||
+                  (store.lastTimestampMs !== null &&
+                   latest.timestamp_ms < store.lastTimestampMs)) {
+                clearDashboardSeries(store);
+                store.seqGap = 0;
+              }
+
+              if (store.lastSeq !== null && seq > store.lastSeq + 1) {
+                store.seqGap += seq - store.lastSeq - 1;
+              }
+              store.lastSeq = seq;
+              store.lastTimestampMs = latest.timestamp_ms;
+
+              pushDashboardSample(store, latest);
+              trimDashboardStore(store, historyWindowRef.current);
+
+              store.latest = latest;
+              store.frames += 1;
+              dashboardBufferRef.current = buf.subarray(frameSize);
+            }
+            queueRender();
+            };
+          };
+
+          connect();
+          return () => {
+            disposed = true;
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            if (ws) ws.close();
+          };
+        }, [wsUrl]);
+
+        const s = useMemo(() => storeRef.current, [renderVersion]);
+        const latest = s.latest;
+        const bitOn = (value, bit) => ((value >> bit) & 0x1) === 1;
+        const onOff = (v) => (v ? "ON" : "OFF");
+        const avail = (v) => (v ? "AVAILABLE" : "UNAVAILABLE");
+        const fmtMaybe = (v, digits = 3) => (typeof v === "number" ? v.toFixed(digits) : "N/A");
+        const radToDeg = (v) => (typeof v === "number" ? (v * 180) / Math.PI : undefined);
+        const wrapAngleDiffDeg = (diff) => {
+          if (!Number.isFinite(diff)) return NaN;
+          let wrapped = diff % 360;
+          if (wrapped >= 180) wrapped -= 360;
+          if (wrapped < -180) wrapped += 360;
+          return wrapped;
+        };
+        const mapSeries = (values, mapper) => values.map((value, index) => mapper(value, index));
+        const diffSeries = (lhs, rhs) =>
+          lhs.map((value, index) => {
+            const other = rhs[index];
+            if (!Number.isFinite(value) || !Number.isFinite(other)) return NaN;
+            return value - other;
+          });
+        const angleDiffSeries = (lhs, rhs) =>
+          lhs.map((value, index) => {
+            const other = rhs[index];
+            if (!Number.isFinite(value) || !Number.isFinite(other)) return NaN;
+            return wrapAngleDiffDeg(value - other);
+          });
+        const alignAngleSeries = (values, refs) =>
+          values.map((value, index) => {
+            const ref = refs[index];
+            if (!Number.isFinite(value) || !Number.isFinite(ref)) return NaN;
+            return ref + wrapAngleDiffDeg(value - ref);
+          });
+        const remoteProtocolName = (protocol) => ({
+          0: "UNKNOWN",
+          1: "DBUS",
+          2: "VT03/VT13 UART",
+        }[protocol] ?? `UNKNOWN(${protocol})`);
+        const remoteModeSwitchName = (raw) => ({
+          0: "C",
+          1: "N",
+          2: "S",
+          255: "N/A",
+        }[raw] ?? `UNKNOWN(${raw})`);
+        const bulletSpeedName = (speed) => ({
+          0: "NONE",
+          10: "BIG_AMU_10",
+          15: "SMALL_AMU_15",
+          16: "BIG_AMU_16",
+          18: "SMALL_AMU_18",
+          30: "SMALL_AMU_30",
+        }[speed] ?? `UNKNOWN(${speed})`);
+        const visionYawRawDeg = mapSeries(s.vision.recvYawRad, (value) => radToDeg(value));
+        const visionPitchRawDeg = mapSeries(s.vision.recvPitchRad, (value) => radToDeg(value));
+        const visionYawRawDegWrapped = alignAngleSeries(visionYawRawDeg, s.yawAngle.target);
+        const visionPitchRawDegWrapped = alignAngleSeries(visionPitchRawDeg, s.pitchAngle.target);
+        const visionYawRawDegS = mapSeries(s.vision.recvYawVelRadS, (value) => radToDeg(value));
+        const visionPitchRawDegS = mapSeries(s.vision.recvPitchVelRadS, (value) => radToDeg(value));
+        const visionYawErrRawToCmd = angleDiffSeries(visionYawRawDeg, s.yawAngle.target);
+        const visionYawErrCmdToActual = angleDiffSeries(s.yawAngle.target, s.yawAngle.actual);
+        const visionYawErrRawToActual = angleDiffSeries(visionYawRawDeg, s.yawAngle.actual);
+        const visionPitchErrRawToCmd = angleDiffSeries(visionPitchRawDeg, s.pitchAngle.target);
+        const visionPitchErrCmdToActual = angleDiffSeries(s.pitchAngle.target, s.pitchAngle.actual);
+        const visionPitchErrRawToActual = angleDiffSeries(visionPitchRawDeg, s.pitchAngle.actual);
+
+        const basicItems = latest
+          ? [
+              { name: "seq", value: latest.seq },
+              { name: "dashboard_version", value: latest.dashboard_version },
+              { name: "dashboard_payload_size", value: latest.dashboard_payload_size },
+              { name: "dashboard_payload_len_header_low8", value: latest.dashboard_payload_len_header_low8 },
+              { name: "dashboard_payload_len_header_matches_low8", value: onOff(latest.dashboard_payload_len_header_matches_low8 !== 0) },
+              { name: "timestamp_ms", value: latest.timestamp_ms },
+              { name: "chassis_power (W)", value: latest.chassis_power.toFixed(3) },
+              { name: "chassis_volt (V)", value: latest.chassis_volt.toFixed(3) },
+              { name: "chassis_power_buffer_energy", value: latest.chassis_power_buffer_energy },
+              { name: "chassis_power_budget_w", value: latest.chassis_power_budget_w.toFixed(3) },
+              { name: "chassis_power_estimated_w", value: latest.chassis_power_estimated_w.toFixed(3) },
+              { name: "chassis_power_scale", value: latest.chassis_power_scale.toFixed(3) },
+              { name: "chassis_power_mode_flags", value: `0x${latest.chassis_power_mode_flags.toString(16).padStart(2, "0")}` },
+              { name: "referee_chassis_current (A)", value: (latest.referee_chassis_current * 0.001).toFixed(3) },
+              { name: "referee_buffer_energy", value: latest.referee_buffer_energy },
+              { name: "referee_shoot_bullet_speed_mps", value: fmtMaybe(latest.referee_shoot_bullet_speed_mps, 3) },
+              { name: "referee_game_state_raw", value: `0x${latest.referee_game_state_raw.toString(16).padStart(2, "0")}` },
+              { name: "referee_game_type", value: latest.referee_game_type },
+              { name: "referee_status", value: latest.referee_status },
+              { name: "referee_stage_remain_time", value: latest.referee_stage_remain_time },
+              { name: "referee_robot_id", value: latest.referee_robot_id },
+              { name: "referee_robot_level", value: latest.referee_robot_level },
+              { name: "referee_shooter_barrel_cooling_value", value: latest.referee_shooter_barrel_cooling_value },
+              { name: "chassis_mode", value: latest.chassis_mode },
+              { name: "gimbal_mode", value: latest.gimbal_mode },
+              { name: "shoot_mode", value: latest.shoot_mode },
+              { name: "shoot_load_mode", value: latest.shoot_load_mode },
+              { name: "shoot_lid_mode", value: latest.shoot_lid_mode },
+              { name: "shoot_friction_mode", value: latest.shoot_friction_mode },
+              { name: "shoot_bullet_speed", value: `${latest.shoot_bullet_speed} (${bulletSpeedName(latest.shoot_bullet_speed)})` },
+              { name: "shoot_rest_heat", value: latest.shoot_rest_heat },
+              { name: "can_link_bitmap", value: `0x${latest.can_link_bitmap.toString(16).padStart(2, "0")}` },
+              { name: "can1_online(bit0)", value: avail(bitOn(latest.can_link_bitmap, 0)) },
+              { name: "can2_online(bit1)", value: avail(bitOn(latest.can_link_bitmap, 1)) },
+              { name: "telemetry_drop_count", value: latest.telemetry_drop_count },
+              { name: "free_heap_bytes", value: latest.free_heap_bytes },
+            ]
+          : [];
+
+        const motorItems = latest
+          ? [
+              { name: "motor_online_bitmap", value: `0x${latest.motor_online_bitmap.toString(16).padStart(2, "0")}` },
+              { name: "gimbal_motor_online_bitmap", value: `0x${latest.gimbal_motor_online_bitmap.toString(16).padStart(2, "0")}` },
+              { name: "shoot_motor_online_bitmap", value: `0x${latest.shoot_motor_online_bitmap.toString(16).padStart(2, "0")}` },
+              { name: "motor_online_lf", value: avail(bitOn(latest.motor_online_bitmap, 0)) },
+              { name: "motor_online_rf", value: avail(bitOn(latest.motor_online_bitmap, 1)) },
+              { name: "motor_online_lb", value: avail(bitOn(latest.motor_online_bitmap, 2)) },
+              { name: "motor_online_rb", value: avail(bitOn(latest.motor_online_bitmap, 3)) },
+              { name: "gimbal_yaw_online", value: avail(bitOn(latest.gimbal_motor_online_bitmap, 0)) },
+              { name: "gimbal_pitch_online", value: avail(bitOn(latest.gimbal_motor_online_bitmap, 1)) },
+              { name: "shoot_loader_online", value: avail(bitOn(latest.shoot_motor_online_bitmap, 0)) },
+              { name: "shoot_friction_l_online", value: avail(bitOn(latest.shoot_motor_online_bitmap, 1)) },
+              { name: "shoot_friction_r_online", value: avail(bitOn(latest.shoot_motor_online_bitmap, 2)) },
+              { name: "motor_target_rpm_lf", value: latest.motor_target_rpm[0].toFixed(2) },
+              { name: "motor_target_rpm_rf", value: latest.motor_target_rpm[1].toFixed(2) },
+              { name: "motor_target_rpm_lb", value: latest.motor_target_rpm[2].toFixed(2) },
+              { name: "motor_target_rpm_rb", value: latest.motor_target_rpm[3].toFixed(2) },
+              { name: "motor_rpm_lf", value: latest.motor_rpm[0].toFixed(2) },
+              { name: "motor_rpm_rf", value: latest.motor_rpm[1].toFixed(2) },
+              { name: "motor_rpm_lb", value: latest.motor_rpm[2].toFixed(2) },
+              { name: "motor_rpm_rb", value: latest.motor_rpm[3].toFixed(2) },
+            ]
+          : [];
+
+        const remoteItems = latest
+          ? [
+              { name: "remote_protocol", value: remoteProtocolName(latest.remote_protocol) },
+              { name: "rc_switches", value: `0x${latest.rc_switches.toString(16).padStart(2, "0")}` },
+              { name: "remote_mode_switch", value: `${latest.remote_mode_switch} (${remoteModeSwitchName(latest.remote_mode_switch)})` },
+              { name: "remote_button_bits", value: `0x${latest.remote_button_bits.toString(16).padStart(2, "0")}` },
+              { name: "remote_control_flags", value: `0x${latest.remote_control_flags.toString(16).padStart(2, "0")}` },
+              { name: "status_flags", value: `0x${latest.status_flags.toString(16).padStart(2, "0")}` },
+              { name: "status_referee_online(bit0)", value: onOff(bitOn(latest.status_flags, 0)) },
+              { name: "status_remote_online(bit1)", value: onOff(bitOn(latest.status_flags, 1)) },
+              { name: "status_imu_online(bit2)", value: onOff(bitOn(latest.status_flags, 2)) },
+              { name: "status_gimbal_feed_updated(bit3)", value: onOff(bitOn(latest.status_flags, 3)) },
+              { name: "status_chassis_feed_updated(bit4)", value: onOff(bitOn(latest.status_flags, 4)) },
+              { name: "status_gimbal_cmd_updated(bit5)", value: onOff(bitOn(latest.status_flags, 5)) },
+              { name: "status_chassis_cmd_updated(bit6)", value: onOff(bitOn(latest.status_flags, 6)) },
+              { name: "status_shoot_feed_updated(bit7)", value: onOff(bitOn(latest.status_flags, 7)) },
+              { name: "vision_enabled(flag0)", value: onOff(bitOn(latest.remote_control_flags, 0)) },
+              { name: "keyboard_mode(flag1)", value: onOff(bitOn(latest.remote_control_flags, 1)) },
+              { name: "emergency_stop(flag2)", value: onOff(bitOn(latest.remote_control_flags, 2)) },
+              ...(latest.remote_protocol === 2
+                ? [
+                    { name: "mode_switch_label", value: remoteModeSwitchName(latest.remote_mode_switch) },
+                    { name: "pause_button(bit0)", value: onOff(bitOn(latest.remote_button_bits, 0)) },
+                    { name: "custom_left(bit1)", value: onOff(bitOn(latest.remote_button_bits, 1)) },
+                    { name: "custom_right(bit2)", value: onOff(bitOn(latest.remote_button_bits, 2)) },
+                    { name: "trigger(bit3)", value: onOff(bitOn(latest.remote_button_bits, 3)) },
+                  ]
+                : [
+                    { name: "rc_switch_left(2bit)", value: latest.rc_switches & 0x03 },
+                    { name: "rc_switch_right(2bit)", value: (latest.rc_switches >> 2) & 0x03 },
+                  ]),
+              { name: "rc_rocker_l_x", value: latest.rc_rocker_l_x },
+              { name: "rc_rocker_l_y", value: latest.rc_rocker_l_y },
+              { name: "rc_rocker_r_x", value: latest.rc_rocker_r_x },
+              { name: "rc_rocker_r_y", value: latest.rc_rocker_r_y },
+              { name: "rc_dial", value: latest.rc_dial },
+              { name: "mouse_x", value: latest.mouse_x },
+              { name: "mouse_y", value: latest.mouse_y },
+              { name: "mouse_z", value: latest.mouse_z },
+              { name: "mouse_left", value: latest.mouse_left },
+              { name: "mouse_right", value: latest.mouse_right },
+              { name: "mouse_middle(bit4)", value: onOff(bitOn(latest.remote_button_bits, 4)) },
+              { name: "key_pressed_bits", value: `0x${latest.key_pressed_bits.toString(16).padStart(4, "0")}` },
+            ]
+          : [];
+
+        const imuItems = latest
+          ? [
+              { name: "imu_pitch_deg", value: latest.imu_angle_deg[0].toFixed(3) },
+              { name: "imu_yaw_deg", value: latest.imu_angle_deg[1].toFixed(3) },
+              { name: "imu_roll_deg", value: latest.imu_angle_deg[2].toFixed(3) },
+              { name: "imu_gyro_x_deg_s", value: latest.imu_gyro_deg_s[0].toFixed(3) },
+              { name: "imu_gyro_y_deg_s", value: latest.imu_gyro_deg_s[1].toFixed(3) },
+              { name: "imu_gyro_z_deg_s", value: latest.imu_gyro_deg_s[2].toFixed(3) },
+              { name: "gimbal_yaw_target_deg", value: latest.gimbal_yaw_target_deg.toFixed(3) },
+              { name: "gimbal_yaw_actual_deg", value: latest.gimbal_yaw_actual_deg.toFixed(3) },
+              { name: "gimbal_yaw_target_deg_s", value: latest.gimbal_yaw_target_deg_s.toFixed(3) },
+              { name: "gimbal_yaw_actual_deg_s", value: latest.gimbal_yaw_actual_deg_s.toFixed(3) },
+              { name: "gimbal_pitch_target_deg", value: latest.gimbal_pitch_target_deg.toFixed(3) },
+              { name: "gimbal_pitch_actual_deg", value: latest.gimbal_pitch_actual_deg.toFixed(3) },
+              { name: "gimbal_pitch_target_deg_s", value: latest.gimbal_pitch_target_deg_s.toFixed(3) },
+              { name: "gimbal_pitch_actual_deg_s", value: latest.gimbal_pitch_actual_deg_s.toFixed(3) },
+              { name: "gimbal_yaw_encoder_raw", value: String(latest.gimbal_yaw_encoder_raw) },
+              { name: "gimbal_pitch_encoder_raw", value: String(latest.gimbal_pitch_encoder_raw) },
+              { name: "gimbal_cmd_yaw_deg", value: latest.gimbal_cmd_yaw_deg.toFixed(3) },
+              { name: "gimbal_cmd_pitch_deg", value: latest.gimbal_cmd_pitch_deg.toFixed(3) },
+              { name: "gimbal_cmd_chassis_rotate_wz", value: latest.gimbal_cmd_chassis_rotate_wz.toFixed(3) },
+              { name: "chassis_cmd_vx", value: latest.chassis_cmd_vx.toFixed(3) },
+              { name: "chassis_cmd_vy", value: latest.chassis_cmd_vy.toFixed(3) },
+              { name: "chassis_cmd_wz", value: latest.chassis_cmd_wz.toFixed(3) },
+              { name: "shoot_rate", value: latest.shoot_rate.toFixed(3) },
+              { name: "shoot_loader_speed_aps", value: latest.shoot_loader_speed_aps.toFixed(3) },
+              { name: "shoot_friction_l_speed_aps", value: latest.shoot_friction_l_speed_aps.toFixed(3) },
+              { name: "shoot_friction_r_speed_aps", value: latest.shoot_friction_r_speed_aps.toFixed(3) },
+            ]
+          : [];
+
+        const visionMetaItems = latest
+          ? [
+              { name: "vision_meta_flags", value: `0x${latest.vision_meta_flags.toString(16).padStart(4, "0")}` },
+              { name: "vision_recv_new_data_latch(bit0)", value: onOff(bitOn(latest.vision_meta_flags, 0)) },
+              { name: "vision_recv_raw_snapshot_valid(bit1)", value: onOff(bitOn(latest.vision_meta_flags, 1)) },
+              { name: "vision_send_raw_snapshot_valid(bit2)", value: onOff(bitOn(latest.vision_meta_flags, 2)) },
+            ]
+          : [];
+
+        const visionRecvProtoItems = latest
+          ? [
+              { name: "vision_to_gimbal.mode", value: latest.vision_recv_sp_mode },
+              { name: "vision_to_gimbal.yaw_rad", value: fmtMaybe(latest.vision_recv_yaw_raw_rad, 6) },
+              { name: "vision_to_gimbal.yaw_deg", value: fmtMaybe(radToDeg(latest.vision_recv_yaw_raw_rad), 3) },
+              { name: "vision_to_gimbal.yaw_vel_rad_s", value: fmtMaybe(latest.vision_recv_yaw_vel_raw_rad_s, 6) },
+              { name: "vision_to_gimbal.yaw_acc_rad_s2", value: fmtMaybe(latest.vision_recv_yaw_acc_raw_rad_s2, 6) },
+              { name: "vision_to_gimbal.pitch_rad", value: fmtMaybe(latest.vision_recv_pitch_raw_rad, 6) },
+              { name: "vision_to_gimbal.pitch_deg", value: fmtMaybe(radToDeg(latest.vision_recv_pitch_raw_rad), 3) },
+              { name: "vision_to_gimbal.pitch_vel_rad_s", value: fmtMaybe(latest.vision_recv_pitch_vel_raw_rad_s, 6) },
+              { name: "vision_to_gimbal.pitch_acc_rad_s2", value: fmtMaybe(latest.vision_recv_pitch_acc_raw_rad_s2, 6) },
+            ]
+          : [];
+
+        const visionSendProtoItems = latest
+          ? [
+              { name: "gimbal_to_vision.mode", value: latest.vision_send_sp_mode },
+              { name: "gimbal_to_vision.q_w", value: fmtMaybe(latest.vision_send_q?.[0], 6) },
+              { name: "gimbal_to_vision.q_x", value: fmtMaybe(latest.vision_send_q?.[1], 6) },
+              { name: "gimbal_to_vision.q_y", value: fmtMaybe(latest.vision_send_q?.[2], 6) },
+              { name: "gimbal_to_vision.q_z", value: fmtMaybe(latest.vision_send_q?.[3], 6) },
+              { name: "gimbal_to_vision.yaw_rad", value: fmtMaybe(latest.vision_send_yaw_raw_rad, 6) },
+              { name: "gimbal_to_vision.yaw_deg", value: fmtMaybe(radToDeg(latest.vision_send_yaw_raw_rad), 3) },
+              { name: "gimbal_to_vision.yaw_vel_rad_s", value: fmtMaybe(latest.vision_send_yaw_vel_raw_rad_s, 6) },
+              { name: "gimbal_to_vision.pitch_rad", value: fmtMaybe(latest.vision_send_pitch_raw_rad, 6) },
+              { name: "gimbal_to_vision.pitch_deg", value: fmtMaybe(radToDeg(latest.vision_send_pitch_raw_rad), 3) },
+              { name: "gimbal_to_vision.pitch_vel_rad_s", value: fmtMaybe(latest.vision_send_pitch_vel_raw_rad_s, 6) },
+              { name: "gimbal_to_vision.bullet_speed_mps", value: fmtMaybe(latest.vision_send_bullet_speed_mps, 3) },
+              { name: "gimbal_to_vision.bullet_count", value: latest.vision_send_bullet_count },
+            ]
+          : [];
+
+        const refereeItems = latest
+          ? [
+              { name: "referee_game_state_raw", value: `0x${latest.referee_game_state_raw.toString(16).padStart(2, "0")}` },
+              { name: "referee_game_type", value: latest.referee_game_type },
+              { name: "referee_status", value: latest.referee_status },
+              { name: "referee_stage_remain_time", value: latest.referee_stage_remain_time },
+              { name: "referee_robot_id", value: latest.referee_robot_id },
+              { name: "referee_robot_level", value: latest.referee_robot_level },
+              { name: "referee_current_hp", value: latest.referee_current_hp },
+              { name: "referee_maximum_hp", value: latest.referee_maximum_hp },
+              { name: "referee_chassis_current (A)", value: (latest.referee_chassis_current * 0.001).toFixed(3) },
+              { name: "referee_buffer_energy", value: latest.referee_buffer_energy },
+              { name: "chassis_power_buffer_energy", value: latest.chassis_power_buffer_energy },
+              { name: "chassis_power_budget_w", value: latest.chassis_power_budget_w.toFixed(3) },
+              { name: "chassis_power_estimated_w", value: latest.chassis_power_estimated_w.toFixed(3) },
+              { name: "chassis_power_scale", value: latest.chassis_power_scale.toFixed(3) },
+              { name: "chassis_power_mode_flags", value: `0x${latest.chassis_power_mode_flags.toString(16).padStart(2, "0")}` },
+              { name: "referee_shooter_barrel_cooling_value", value: latest.referee_shooter_barrel_cooling_value },
+              { name: "referee_shooter_barrel_heat_limit", value: latest.referee_shooter_barrel_heat_limit },
+              { name: "referee_chassis_power_limit", value: latest.referee_chassis_power_limit },
+              { name: "referee_shooter_17mm_1_barrel_heat", value: latest.referee_shooter_17mm_1_barrel_heat },
+              { name: "referee_shooter_17mm_2_barrel_heat", value: latest.referee_shooter_17mm_2_barrel_heat },
+              { name: "referee_shooter_42mm_barrel_heat", value: latest.referee_shooter_42mm_barrel_heat },
+              { name: "referee_shoot_bullet_speed_mps", value: fmtMaybe(latest.referee_shoot_bullet_speed_mps, 3) },
+              { name: "referee_power_management_flags", value: `0x${latest.referee_power_management_flags.toString(16).padStart(2, "0")}` },
+              { name: "power_mgmt_gimbal(bit0)", value: onOff(bitOn(latest.referee_power_management_flags, 0)) },
+              { name: "power_mgmt_chassis(bit1)", value: onOff(bitOn(latest.referee_power_management_flags, 1)) },
+              { name: "power_mgmt_shooter(bit2)", value: onOff(bitOn(latest.referee_power_management_flags, 2)) },
+              { name: "status_referee_online(bit0)", value: onOff(bitOn(latest.status_flags, 0)) },
+              { name: "shoot_mode", value: latest.shoot_mode },
+              { name: "shoot_load_mode", value: latest.shoot_load_mode },
+              { name: "shoot_friction_mode", value: latest.shoot_friction_mode },
+              { name: "shoot_bullet_speed", value: `${latest.shoot_bullet_speed} (${bulletSpeedName(latest.shoot_bullet_speed)})` },
+              { name: "shoot_rest_heat", value: latest.shoot_rest_heat },
+              { name: "shoot_rate", value: latest.shoot_rate.toFixed(3) },
+              { name: "telemetry_drop_count", value: latest.telemetry_drop_count },
+              { name: "can_link_bitmap", value: `0x${latest.can_link_bitmap.toString(16).padStart(2, "0")}` },
+              { name: "can1_online(bit0)", value: avail(bitOn(latest.can_link_bitmap, 0)) },
+              { name: "can2_online(bit1)", value: avail(bitOn(latest.can_link_bitmap, 1)) },
+            ]
+          : [];
+
+        return (
+          <div className="app">
+            <div className="top">
+              <div>
+                <div className="title">RTT Telemetry Dashboard</div>
+                <div className="muted">Realtime dashboard and logger viewer.</div>
+              </div>
+              <div className="toolbar">
+                <button className="btn" onClick={openSettings}>Settings</button>
+                <div className="status">
+                  <div className={`pill ${connected ? "pill-good" : "pill-bad"}`}>WS: {connected ? "CONNECTED" : "DISCONNECTED"}</div>
+                  <div className="pill">frames: {s.frames}</div>
+                  <div className="pill">window: {historyWindowSec}s</div>
+                  <div className={`pill ${latest && bitOn(latest.can_link_bitmap, 0) ? "pill-good" : "pill-bad"}`}>
+                    CAN1: {latest ? (bitOn(latest.can_link_bitmap, 0) ? "ON" : "OFF") : "-"}
+                  </div>
+                  <div className={`pill ${latest && bitOn(latest.can_link_bitmap, 1) ? "pill-good" : "pill-bad"}`}>
+                    CAN2: {latest ? (bitOn(latest.can_link_bitmap, 1) ? "ON" : "OFF") : "-"}
+                  </div>
+                  <div className="pill">seq_gap: {s.seqGap}</div>
+                  <div className="pill">crc_err: {s.crcError}</div>
+                  <div className="pill">sync_drop: {s.syncDrop}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="panel row">
+              <div className="tabs">
+                <button className={`tab ${tab === "motors" ? "active" : ""}`} onClick={() => setTab("motors")}>Motors</button>
+                <button className={`tab ${tab === "imu" ? "active" : ""}`} onClick={() => setTab("imu")}>IMU & Gimbal</button>
+                <button className={`tab ${tab === "vision" ? "active" : ""}`} onClick={() => setTab("vision")}>Vision</button>
+                <button className={`tab ${tab === "referee" ? "active" : ""}`} onClick={() => setTab("referee")}>Referee</button>
+                <button className={`tab ${tab === "logs" ? "active" : ""}`} onClick={() => setTab("logs")}>Logs</button>
+                <button className={`tab ${tab === "all" ? "active" : ""}`} onClick={() => setTab("all")}>All Fields</button>
+              </div>
+            </div>
+
+            {tab === "motors" ? (
+              <div className="grid2 row">
+                {[0, 1, 2, 3].map((i) => (
+                  <LineChartPanel
+                    key={i}
+                    title={`Motor ${["LF", "RF", "LB", "RB"][i]}`}
+                    timestamps={s.timeline}
+                    historyWindowMs={historyWindowMs}
+                    meta={`window=${historyWindowSec}s points=${s.motors[i].target.length}`}
+                    series={[
+                      { name: "target rpm", color: "#0f766e", values: s.motors[i].target },
+                      { name: "actual rpm", color: "#b54708", values: s.motors[i].actual },
+                    ]}
+                  />
+                ))}
+                <LineChartPanel
+                  title="Chassis Cmd"
+                  timestamps={s.timeline}
+                  historyWindowMs={historyWindowMs}
+                  meta={`window=${historyWindowSec}s points=${s.cmd.vx.length}`}
+                  series={[
+                    { name: "vx", color: "#0f766e", values: s.cmd.vx },
+                    { name: "vy", color: "#1d4ed8", values: s.cmd.vy },
+                    { name: "wz", color: "#a21caf", values: s.cmd.wz },
+                  ]}
+                />
+              </div>
+            ) : null}
+
+            {tab === "imu" ? (
+              <div className="grid2 row">
+                <LineChartPanel
+                  title="IMU Angle (deg)"
+                  timestamps={s.timeline}
+                  historyWindowMs={historyWindowMs}
+                  meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                  series={[
+                    { name: "pitch", color: "#0f766e", values: s.imuAngle[0] },
+                    { name: "yaw", color: "#1d4ed8", values: s.imuAngle[1] },
+                    { name: "roll", color: "#a21caf", values: s.imuAngle[2] },
+                  ]}
+                />
+                <LineChartPanel
+                  title="IMU Gyro (deg/s)"
+                  timestamps={s.timeline}
+                  historyWindowMs={historyWindowMs}
+                  meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                  series={[
+                    { name: "gyro_x", color: "#0f766e", values: s.imuGyro[0] },
+                    { name: "gyro_y", color: "#1d4ed8", values: s.imuGyro[1] },
+                    { name: "gyro_z", color: "#a21caf", values: s.imuGyro[2] },
+                  ]}
+                />
+                <LineChartPanel
+                  title="Gimbal Yaw Angle (deg)"
+                  timestamps={s.timeline}
+                  historyWindowMs={historyWindowMs}
+                  meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                  series={[
+                    { name: "target angle", color: "#0f766e", values: s.yawAngle.target },
+                    { name: "actual angle", color: "#b54708", values: s.yawAngle.actual },
+                  ]}
+                />
+                <LineChartPanel
+                  title="Gimbal Yaw Speed (deg/s)"
+                  timestamps={s.timeline}
+                  historyWindowMs={historyWindowMs}
+                  meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                  series={[
+                    { name: "target speed", color: "#1d4ed8", values: s.yawSpeed.target },
+                    { name: "actual speed", color: "#a21caf", values: s.yawSpeed.actual },
+                  ]}
+                />
+                <LineChartPanel
+                  title="Gimbal Pitch Angle (deg)"
+                  timestamps={s.timeline}
+                  historyWindowMs={historyWindowMs}
+                  meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                  series={[
+                    { name: "target angle", color: "#0f766e", values: s.pitchAngle.target },
+                    { name: "actual angle", color: "#b54708", values: s.pitchAngle.actual },
+                  ]}
+                />
+                <LineChartPanel
+                  title="Gimbal Pitch Speed (deg/s)"
+                  timestamps={s.timeline}
+                  historyWindowMs={historyWindowMs}
+                  meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                  series={[
+                    { name: "target speed", color: "#1d4ed8", values: s.pitchSpeed.target },
+                    { name: "actual speed", color: "#a21caf", values: s.pitchSpeed.actual },
+                  ]}
+                />
+              </div>
+            ) : null}
+
+            {tab === "vision" ? (
+              <>
+                <div className="grid2 row">
+                  <LineChartPanel
+                    title="Vision Yaw Chain (deg)"
+                    timestamps={s.timeline}
+                    historyWindowMs={historyWindowMs}
+                    meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                    series={[
+                      { name: "vision raw", color: "#1d4ed8", values: visionYawRawDegWrapped },
+                      { name: "cmd target", color: "#0f766e", values: s.yawAngle.target },
+                      { name: "gimbal actual", color: "#b54708", values: s.yawAngle.actual },
+                    ]}
+                  />
+                  <LineChartPanel
+                    title="Vision Yaw Speed Chain (deg/s)"
+                    timestamps={s.timeline}
+                    historyWindowMs={historyWindowMs}
+                    meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                    series={[
+                      { name: "vision raw vel", color: "#1d4ed8", values: visionYawRawDegS },
+                      { name: "cmd speed", color: "#0f766e", values: s.yawSpeed.target },
+                      { name: "gimbal actual", color: "#a21caf", values: s.yawSpeed.actual },
+                    ]}
+                  />
+                </div>
+                <div className="grid2 row">
+                  <LineChartPanel
+                    title="Vision Pitch Chain (deg)"
+                    timestamps={s.timeline}
+                    historyWindowMs={historyWindowMs}
+                    meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                    series={[
+                      { name: "vision raw", color: "#1d4ed8", values: visionPitchRawDegWrapped },
+                      { name: "cmd target", color: "#0f766e", values: s.pitchAngle.target },
+                      { name: "gimbal actual", color: "#b54708", values: s.pitchAngle.actual },
+                    ]}
+                  />
+                  <LineChartPanel
+                    title="Vision Pitch Speed Chain (deg/s)"
+                    timestamps={s.timeline}
+                    historyWindowMs={historyWindowMs}
+                    meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                    series={[
+                      { name: "vision raw vel", color: "#1d4ed8", values: visionPitchRawDegS },
+                      { name: "cmd speed", color: "#0f766e", values: s.pitchSpeed.target },
+                      { name: "gimbal actual", color: "#a21caf", values: s.pitchSpeed.actual },
+                    ]}
+                  />
+                </div>
+                <div className="grid2 row">
+                  <LineChartPanel
+                    title="Vision Yaw Errors (deg)"
+                    timestamps={s.timeline}
+                    historyWindowMs={historyWindowMs}
+                    meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                    series={[
+                      { name: "raw - cmd", color: "#1d4ed8", values: visionYawErrRawToCmd },
+                      { name: "cmd - actual", color: "#b54708", values: visionYawErrCmdToActual },
+                      { name: "raw - actual", color: "#a21caf", values: visionYawErrRawToActual },
+                    ]}
+                  />
+                  <LineChartPanel
+                    title="Vision Pitch Errors (deg)"
+                    timestamps={s.timeline}
+                    historyWindowMs={historyWindowMs}
+                    meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                    series={[
+                      { name: "raw - cmd", color: "#1d4ed8", values: visionPitchErrRawToCmd },
+                      { name: "cmd - actual", color: "#b54708", values: visionPitchErrCmdToActual },
+                      { name: "raw - actual", color: "#a21caf", values: visionPitchErrRawToActual },
+                    ]}
+                  />
+                </div>
+                <div className="grid2 row">
+                  <GroupPanel title="VisionToGimbal (SP)" items={visionRecvProtoItems} />
+                  <GroupPanel title="GimbalToVision (SP)" items={visionSendProtoItems} />
+                </div>
+                <div className="grid2 row">
+                  <GroupPanel title="Vision Protocol Meta" items={visionMetaItems} />
+                </div>
+              </>
+            ) : null}
+
+            {tab === "referee" ? (
+              <>
+                <div className="grid2 row">
+                  <LineChartPanel
+                    title="Referee Link & Heat"
+                    timestamps={s.timeline}
+                    historyWindowMs={historyWindowMs}
+                    meta={`window=${historyWindowSec}s points=${s.referee.status.length}`}
+                    series={[
+                      { name: "referee_status", color: "#0f766e", values: s.referee.status },
+                      { name: "rest_heat", color: "#b54708", values: s.referee.restHeat },
+                    ]}
+                  />
+                  <LineChartPanel
+                    title="Shoot Bullet Speed & Rate"
+                    timestamps={s.timeline}
+                    historyWindowMs={historyWindowMs}
+                    meta={`window=${historyWindowSec}s points=${s.referee.bulletSpeed.length}`}
+                    series={[
+                      { name: "bullet_speed", color: "#1d4ed8", values: s.referee.bulletSpeed },
+                      { name: "shoot_rate", color: "#a21caf", values: s.referee.shootRate },
+                    ]}
+                  />
+                </div>
+                <div className="grid2 row">
+                  <GroupPanel title="Referee Snapshot" items={refereeItems} />
+                  <GroupPanel title="Remote Snapshot" items={remoteItems} />
+                </div>
+              </>
+            ) : null}
+
+            {tab === "logs" ? (
+              <div className="panel row">
+                <div className="chart-title" style={{ marginBottom: 8 }}>Logger Channel 0 (tail {LOG_TAIL_VIEW} lines)</div>
+                <LogViewer lines={s.logs} />
+              </div>
+            ) : null}
+
+            {tab === "all" ? (
+              <div className="all-groups row">
+                <GroupPanel title="Basic" items={basicItems} />
+                <GroupPanel title="Motor" items={motorItems} />
+                <GroupPanel title="Remote & Status" items={remoteItems} />
+                <GroupPanel title="IMU & Control" items={imuItems} />
+                <GroupPanel title="Referee" items={refereeItems} />
+                <GroupPanel title="VisionToGimbal (SP)" items={visionRecvProtoItems} />
+                <GroupPanel title="GimbalToVision (SP)" items={visionSendProtoItems} />
+                <GroupPanel title="Vision Protocol Meta" items={visionMetaItems} />
+              </div>
+            ) : null}
+
+            {settingsOpen ? (
+              <div className="dialog-backdrop" onClick={() => setSettingsOpen(false)}>
+                <div className="dialog" onClick={(e) => e.stopPropagation()}>
+                  <div className="chart-title" style={{ marginBottom: 10 }}>Settings</div>
+                  <div className="field">
+                    <div className="field-label">WebSocket URL</div>
+                    <input
+                      type="text"
+                      value={draftWsUrl}
+                      onChange={(e) => setDraftWsUrl(e.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <div className="field-label">Chart Time Window (seconds)</div>
+                    <input
+                      type="number"
+                      min={MIN_HISTORY_WINDOW_SEC}
+                      step="1"
+                      value={draftHistoryWindowSec}
+                      onChange={(e) => setDraftHistoryWindowSec(e.target.value)}
+                    />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                    <button
+                      className="btn"
+                      onClick={() => {
+                        const nextHistoryWindow = Math.max(
+                          MIN_HISTORY_WINDOW_SEC,
+                          Math.round(Number(draftHistoryWindowSec) || DEFAULT_HISTORY_WINDOW_SEC)
+                        );
+                        setWsUrl(draftWsUrl.trim() || wsDefault);
+                        setHistoryWindowSec(nextHistoryWindow);
+                        setSettingsOpen(false);
+                      }}
+                    >
+                      Apply
+                    </button>
+                    <button className="btn" onClick={() => setSettingsOpen(false)}>Close</button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    </script>
+  </body>
+</html>

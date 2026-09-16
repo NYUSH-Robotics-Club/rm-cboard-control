@@ -492,6 +492,11 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["--just"]:
         argv = shlex.split(argv[1])
+    if argv[:1] in (["logger"], ["logger-cli"]):
+        mode = argv[0]
+        script = ROOT / "scripts" / "dashboard" / ("rtt_ws_bridge.py" if mode == "logger" else "rtt_dashboard.py")
+        defaults = (["--dashboard-channel", "1", "--log-channel", "0", "--ws-host", "127.0.0.1", "--ws-port", "8765", "--http-host", "127.0.0.1", "--http-port", "8080"] if mode == "logger" else ["--mode", "dashboard", "--channel", "1", "--log-channel", "0", "--connect", "normal", "--poll-ms", "20", "--refresh-ms", "100"])
+        return subprocess.call([sys.executable, str(script), *defaults, *argv[1:]], cwd=ROOT)
     if argv[:1] == ["monitor"]:
         import gimbal_monitor
         try:
