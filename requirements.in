@@ -1,4 +1,4 @@
-# Host serial logging and plotting; resolve current stable versions with uv pip compile --upgrade.
-pyserial
+# Host logging, RTT dashboards, and plotting; resolve updates with uv pip compile --upgrade.
+-r scripts/requirement.txt
 numpy
 matplotlib

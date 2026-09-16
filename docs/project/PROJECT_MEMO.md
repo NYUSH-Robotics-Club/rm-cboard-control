@@ -1,6 +1,6 @@
 # RoboMaster Control — Project Memory
 
-更新于 2026-09-15。每次任务先读本文件；结束时更新受影响的结论、证据与待办，
+更新于 2026-09-16。每次任务先读本文件；结束时更新受影响的结论、证据与待办，
 合并已被替代的记录，不追加逐轮流水账。运行状态只对对应采样窗口有效。
 
 ## 有效约束
@@ -804,7 +804,30 @@
 依赖方向：`application -> core contracts/interfaces -> services/adapters -> modules -> bsp -> HAL`。
 保留的 `runtime/rtos` 依赖 application、消息中心和 FreeRTOS，但当前未启动。
 
-- 09-15 用户按截图查RTT/RRT dashboard：当前工作区及本地已有main/group2/group3/group4/py
+- 09-16 修复`just logger`依赖与目标支持：当前仓库已有scripts/dashboard网页/终端入口、
+  scripts/rtt_common传输及CMake RTT/dashboard源登记，下段09-15检索只代表当时版本。
+  原根requirements.in未包含scripts/requirement.txt，本机.venv缺websockets/pyocd/rich；
+  现根清单引用该子清单并重新解析requirements.txt，原有包版本保留。桥接用新版asyncio
+  serve/process_request接口，按官方迁移说明将websockets下限12→14；安装到本机.venv的
+  websockets17.1、pyocd0.45.1、rich15.0.0及传递依赖已完成，常规安装覆盖仪表盘。
+  启动仍沿用PATH中的python3及sys.executable，新终端先source tools/activate.sh；使用说明
+  已加入logger-guide；两入口--help、模块导入及uv pip check（41包）通过。
+  后续安装Keil.STM32F4xx_DFP3.1.1；原stm32f407ig短名也在包中，直接原因是缺包。
+  pyOCD入口按.ioc的STM32F407IGH6TR明确选stm32f407ighx，J-Link保留原名；缺包提示安装命令，
+  auto未发现J-Link时不再用缺DLL错误覆盖pyOCD失败。normal映射attach、关闭auto_unlock及
+  resume_on_disconnect，并禁用会直接写DHCSR的包DebugCoreStart，改用保留状态的通用实现；
+  原已暂停则报错不恢复，显式halt/under-reset保留原先干预后恢复行为。RTT消费会写读指针。
+  实际枚举ST-Link0669FF535548877187254949，附加成功但无RTT控制块；运行中纯读Flash146256B
+  完全匹配构建前无_SEGGER_RTT/Dashboard符号的旧ELF，bin SHA256=52d23aeb513942d186d29a6b8d8e81e81f3db7dc671f43b6028a30a1d2c6af8c，
+  读取前后CPU均RUNNING。当前源码虽有Dashboard_Step调用，CMake引用的SEGGER_RTT.c/h缺失。
+  已从SEGGERMicro/RTT提交4d8feab3150f86f37a9d323ddc88d6cdf5673072补齐三份原样C/头文件、
+  LICENSE及source.json哈希；保留旧Conf并设RTT_USE_ASM=0。两车型构建/ELF检查通过，
+  FLASH148296/149144B、RAM57400B，步兵ELF777895d06934e0d7ea6f5c8b66f5e57bc987982d7badd4ba704eee874776f7b8，
+  含Dashboard_Init/Step和_SEGGER_RTT；9项模拟传输测试、Python语法/差异检查通过。
+  构建日志/tmp/rm-logger-{build,sentry-build}-20260916.log。无控制参数/冻结底层修改、
+  暂停/复位/恢复/烧录；须用户烧录新固件后再验证实际RTT帧和网页曲线，当前仍是旧镜像。
+
+- 09-15 用户按截图查RTT/RRT dashboard：当时工作区及本地已有main/group2/group3/group4/py
   分支引用未找到dashboard、截图四图标题或SEGGER_RTT实现；未刷新远端，不推断其他仓库情况。
   当前tools/gimbal_monitor.py与just monitor提供双轴目标/实际位置、速度、电流的终端显示/CSV，
   没有截图式实时曲线界面。script/deprecated/plot_yaw_data.py、plot_pitch.py是旧串口CSV+

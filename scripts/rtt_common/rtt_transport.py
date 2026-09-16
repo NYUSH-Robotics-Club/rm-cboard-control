@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""Connect host RTT readers through pyOCD or J-Link and own their sessions.
+
+Normal pyOCD monitoring attaches without halting or resuming the target; failures
+close the session. Reading an RTT up channel advances its target read offset.
+"""
 import dataclasses
 import pathlib
 import subprocess
@@ -8,6 +13,8 @@ from typing import List, Optional
 
 @dataclasses.dataclass
 class RTTTransportConfig:
+    """Probe settings; speed is in kHz and device names are backend-specific."""
+
     device: str = "STM32F407IG"
     serial: Optional[str] = None
     speed_khz: int = 4000
@@ -41,27 +48,18 @@ class RTTTransport:
             self.backend_in_use = "jlink"
             return
 
-        pyocd_error: Optional[Exception] = None
         if mode in ("auto", "pyocd"):
             try:
                 self._open_pyocd()
                 self.backend_in_use = "pyocd"
                 return
             except Exception as exc:
-                pyocd_error = exc
                 self.error_message = str(exc)
-                if mode == "pyocd":
-                    raise
+                # No J-Link was detected above; preserve the actionable pyOCD error.
+                raise
 
-        try:
-            self._open_jlink()
-            self.backend_in_use = "jlink"
-        except Exception as exc:
-            if pyocd_error is not None:
-                raise RuntimeError(
-                    f"pyOCD failed: {pyocd_error}; J-Link fallback failed: {exc}"
-                ) from exc
-            raise
+        self._open_jlink()
+        self.backend_in_use = "jlink"
 
     def close(self) -> None:
         if self._session is not None:
@@ -125,34 +123,51 @@ class RTTTransport:
         return b""
 
     def _open_pyocd(self) -> None:
+        from pyocd.core.exceptions import TargetSupportError
         from pyocd.core.helpers import ConnectHelper
         from pyocd.core.target import Target
         from pyocd.debug.rtt import RTTControlBlock
 
-        options: dict[str, object] = {"frequency": int(self.config.speed_khz) * 1000}
-        if self.config.connect_mode != "normal":
-            options["connect_mode"] = self.config.connect_mode
+        options: dict[str, object] = {
+            "frequency": int(self.config.speed_khz) * 1000,
+            "connect_mode": "attach" if self.config.connect_mode == "normal" else self.config.connect_mode,
+            "resume_on_disconnect": False,
+            "auto_unlock": False,
+        }
+        if self.config.connect_mode == "normal":
+            # The STM32 pack's DebugCoreStart writes DHCSR outright, which can
+            # resume a halted core. Use pyOCD's state-preserving implementation.
+            options["pack.debug_sequences.disabled_sequences"] = ["DebugCoreStart"]
 
         target_override = self.config.device if self.config.device else None
-        session = ConnectHelper.session_with_chosen_probe(
-            unique_id=self.config.serial,
-            target_override=target_override,
-            options=options,
-        )
+        # The C-board .ioc specifies STM32F407IGH6TR. J-Link accepts the short
+        # family name; select the exact H-package variant in the CMSIS pack.
+        if target_override and target_override.lower() == "stm32f407ig":
+            target_override = "stm32f407ighx"
+        try:
+            session = ConnectHelper.session_with_chosen_probe(
+                unique_id=self.config.serial,
+                target_override=target_override,
+                options=options,
+            )
+        except TargetSupportError as exc:
+            raise RuntimeError(
+                f"pyOCD target {target_override!r} is not installed. Activate the project "
+                f"environment, then run: python -m pyocd pack install {target_override}"
+            ) from exc
         if session is None:
-            raise RuntimeError("No CMSIS-DAP/J-Link probe found.")
+            raise RuntimeError("No ST-Link/CMSIS-DAP/J-Link probe found.")
 
         try:
             session.open()
             if session.target is None:
                 raise RuntimeError("Failed to attach target.")
 
-            try:
-                state = session.target.get_state()
-                if state == Target.State.HALTED:
-                    session.target.resume()
-            except Exception:
-                pass
+            if session.target.get_state() == Target.State.HALTED:
+                if self.config.connect_mode == "normal":
+                    raise RuntimeError("Target is halted; RTT monitoring did not resume it.")
+                # Explicit halt/reset connection modes retain their prior restart behavior.
+                session.target.resume()
 
             rtt_addr = self._resolve_rtt_cb_addr_from_elf()
             if rtt_addr is None:

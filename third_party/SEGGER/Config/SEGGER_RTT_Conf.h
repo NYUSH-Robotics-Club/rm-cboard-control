@@ -58,6 +58,9 @@ Revision: $Rev: 24316 $
 #ifndef SEGGER_RTT_CONF_H
 #define SEGGER_RTT_CONF_H
 
+// This project links the portable C RTT implementation without the optional assembly file.
+#define RTT_USE_ASM 0
+
 #ifdef __IAR_SYSTEMS_ICC__
   #include <intrinsics.h>
 #endif

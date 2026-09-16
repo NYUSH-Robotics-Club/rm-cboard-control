@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""Serve RTT telemetry to browser clients and save host-side monitor records.
+
+Probe connection is owned by RTTTransport; connection failures stop startup.
+"""
 import argparse
 import asyncio
 import base64
@@ -350,7 +354,7 @@ class RTTWebSocketBridge:
             self.transport.open()
         except Exception as exc:
             print(str(exc))
-            print("Tip: try --backend jlink/pyocd, --connect under-reset, or lower --speed.")
+            print("Check target support and probe access; ST-Link uses --backend pyocd.")
             return 2
 
         channels = self.transport.available_channels()

@@ -1,7 +1,52 @@
 # Logger 使用指南
 
-本文说明当前固件日志接口和主机端串口工具。实现以
-`modules/logger/` 和 `script/logger.py` 为准。
+本文说明固件日志接口、主机端串口工具和 RTT 仪表盘入口。
+串口实现以 `modules/logger/` 和 `script/logger.py` 为准，
+`just logger` 启动的是 `scripts/dashboard/rtt_ws_bridge.py` 网页仪表盘。
+
+## RTT 仪表盘的 Python 环境
+
+在仓库根目录安装依赖，并在每个新终端激活项目环境：
+
+```bash
+uv pip install --python .venv/bin/python -r requirements.txt
+source tools/activate.sh
+python -m pyocd pack install stm32f407ighx
+just logger --help
+just logger
+```
+
+`just logger` 沿用启动 `just` 时 PATH 中的 `python3`，因此只给其他 Python
+安装依赖不能解决 `ModuleNotFoundError: No module named 'websockets'`。
+根目录 `requirements.in` 已包含 `scripts/requirement.txt` 的仪表盘依赖，
+`requirements.txt` 保存解析后的版本；网页入口依赖 `websockets`，探针连接依赖
+`pyocd`，终端入口 `just logger-cli` 可使用 `rich`。
+
+桥接使用新版 asyncio 服务接口，所以 `websockets` 下限为 14.0，见
+[官方迁移说明](https://websockets.readthedocs.io/en/stable/howto/upgrade.html)。
+`--help` 只验证启动和参数，不连接板卡；实际曲线仍要求匹配的固件 RTT 输出及可用探针。
+默认网页地址为 `http://127.0.0.1:8080/`。
+
+本机 ST-Link 使用 pyOCD 后端；`just logger --backend pyocd` 可显式选择。
+STM32F4 支持包与 Python 包分开安装，见
+[pyOCD 芯片支持说明](https://pyocd.io/docs/target_support.html)。脚本将默认短型号
+`STM32F407IG` 映射到 `.ioc` 中 H 封装对应的 `stm32f407ighx`；未知型号仍需显式指定。
+自动模式只在检测到 J-Link 时使用它，ST-Link 不需要安装 J-Link 动态库。
+
+默认 `--connect normal` 对 pyOCD 表示 `attach`，保持 CPU 原来的运行状态；
+目标已暂停时退出提示，不自动恢复。显式 `halt` / `under-reset` 会干预执行后恢复运行，
+不用于日常监控。RTT 消费数据会更新上行缓冲区的读指针，不是完全无写入的内存观察。
+
+若连接后报 `Control block not found`，先确认板上固件包含并初始化了 RTT。
+09-16 只读比对确认本机板上仍是没有 RTT 的旧镜像；缺失的 SEGGER 源码已补齐，
+新构建包含 `_SEGGER_RTT` 和 `Dashboard_Step`。更新板上程序后再开仪表盘：
+
+```bash
+just flash
+just logger
+```
+
+`just flash` 会先构建并校验，烧录成功后按本机配置复位运行；不要同时运行其他占用探针的工具。
 
 ## 当前能力
 
@@ -77,8 +122,8 @@ python script/logger.py --list-tags
 ## 查看消息回调和变量（OpenOCD + GDB）
 
 当前是裸机 `MsgCenter_Dispatch()` 调用订阅回调，不是 FreeRTOS 任务。
-USB logger 只接收主动输出的日志，不能直接订阅 MCU 内部消息中心，也没有现成的
-全量电机反馈流或 RTT 通道。需要观察 `on_gimbal_cmd`、`on_imu_update` 的参数、
+USB logger 只接收主动输出的串口日志，不能直接订阅 MCU 内部消息中心；
+RTT 仪表盘使用上方独立入口。需要观察 `on_gimbal_cmd`、`on_imu_update` 的参数、
 调用栈或变量时，可以用工具链自带的 `arm-none-eabi-gdb`。
 
 **断点会暂停控制循环，可能留下电机最后一次输出。先隔离动力输出再调试。**
