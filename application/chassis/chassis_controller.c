@@ -318,6 +318,12 @@ void ChassisApp_Init(void) {
     (void)MsgCenter_Subscribe(TOPIC_MOTOR_FEEDBACK, on_motor_feedback, NULL);
 }
 
-ChassisController* ChassisApp_GetController(void) {
+const ChassisController* ChassisApp_GetController(void) {
     return &s_ctrl;
+}
+
+uint8_t ChassisApp_GetMotorIds(uint8_t ids[CHASSIS_MOTOR_COUNT]) {
+    if (!ids || !s_config_valid) return 0U;
+    memcpy(ids, s_chassis_motor_ids, s_chassis_motor_count);
+    return s_chassis_motor_count;
 }

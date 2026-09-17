@@ -1,3 +1,6 @@
+/* 将应用诊断打包为RTT遥测。版本8保留版本7前缀，并附带数据能力、轴状态和电机编号。
+ * 浮点NaN表示未接入、过期或未启用的测量/目标，不能画成零值。只观察，不改变控制。
+ */
 #ifndef RM_DASHBOARD_H
 #define RM_DASHBOARD_H
 
@@ -6,7 +9,15 @@
 #define DASHBOARD_RTT_CHANNEL 1U
 #define DASHBOARD_RTT_BUFFER_SIZE 2048U
 #define DASHBOARD_FRAME_MAGIC 0x4452U
-#define DASHBOARD_FRAME_VERSION 7U
+#define DASHBOARD_FRAME_VERSION 8U
+
+enum {
+  DASHBOARD_CAN = 1U,      /* CAN位表示该总线有配置电机在100ms内反馈，不代表总线无错误。 */
+  DASHBOARD_REMOTE = 2U,
+  DASHBOARD_CHASSIS = 4U,
+  DASHBOARD_IMU = 8U,
+  DASHBOARD_GIMBAL = 16U
+};
 
 #pragma pack(push, 1)
 typedef struct {
@@ -32,10 +43,16 @@ typedef struct {
   float vision_recv_yaw_raw_rad, vision_recv_yaw_vel_raw_rad_s, vision_recv_yaw_acc_raw_rad_s2, vision_recv_pitch_raw_rad, vision_recv_pitch_vel_raw_rad_s, vision_recv_pitch_acc_raw_rad_s2;
   float vision_send_q[4], vision_send_yaw_raw_rad, vision_send_yaw_vel_raw_rad_s, vision_send_pitch_raw_rad, vision_send_pitch_vel_raw_rad_s, vision_send_bullet_speed_mps;
   uint16_t vision_send_bullet_count;
+  uint32_t capabilities; /* 表示生产端已接入哪些数据，在线/有效性由状态位和NaN区分。 */
+  uint8_t yaw_flags, pitch_flags; /* GimbalMonitorAxis.flags；位置旁路时不发布位置目标。 */
+  uint8_t chassis_motor_ids[4]; /* 与四组速度数组同序；0表示该槽没有配置电机。 */
+  uint8_t gimbal_enabled, gimbal_startup_ready;
 } DashboardPayload;
 typedef struct { uint16_t magic; uint8_t version, payload_len; uint32_t seq; DashboardPayload payload; uint16_t crc16; } DashboardFrame;
 #pragma pack(pop)
 
+/* 主循环中初始化订阅和非阻塞RTT通道；失败不发布伪造的有效数据。可重复调用。 */
 void Dashboard_Init(void);
+/* 主循环读取最新应用状态，写一帧；缓冲区满则丢弃本帧并计数，不阻塞控制。 */
 void Dashboard_Step(void);
 #endif

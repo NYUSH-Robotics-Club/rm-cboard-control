@@ -30,6 +30,8 @@ Release/
 *.log
 *.tmp
 logs/
+# Generated RTT capture logs; keep local recordings out of commits.
+/monitor/logger_*.txt
 
 # Generated files
 *.generated.*

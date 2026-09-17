@@ -117,6 +117,11 @@ void ChassisController_UpdateMotorFeedback(ChassisController *controller, uint8_
  */
 void ChassisApp_Init(void);
 
+/* 主循环只读诊断；指针归应用所有，速度为RPM。
+ * ids容量须为4，编号与速度数组同序；空指针/未配置返回0，否则返回写入数。 */
+const ChassisController *ChassisApp_GetController(void);
+uint8_t ChassisApp_GetMotorIds(uint8_t ids[CHASSIS_MOTOR_COUNT]);
+
 /**
  * @brief Wait for swerve steer motors to align to initial position
  * @note Only applicable for sentry_swerve configuration

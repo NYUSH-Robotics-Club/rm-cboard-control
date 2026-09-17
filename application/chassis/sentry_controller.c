@@ -491,7 +491,13 @@ void ChassisApp_Init(void) {
       NULL); // Subscribe to GM6020 feedback for steer motors
 }
 
-ChassisController *ChassisApp_GetController(void) { return &s_ctrl; }
+const ChassisController *ChassisApp_GetController(void) { return &s_ctrl; }
+
+uint8_t ChassisApp_GetMotorIds(uint8_t ids[CHASSIS_MOTOR_COUNT]) {
+  if (!ids) return 0U;
+  memcpy(ids, s_drive_motor_ids, s_drive_motor_count);
+  return s_drive_motor_count;
+}
 
 /**
  * @brief Wait for swerve steer motors to align to initial position

@@ -82,6 +82,15 @@ MONITOR_COLUMNS = (
     "chassis_cmd_vx",
     "chassis_cmd_vy",
     "chassis_cmd_wz",
+    "capabilities",
+    "yaw_flags",
+    "pitch_flags",
+    "gimbal_enabled",
+    "gimbal_startup_ready",
+    "chassis_motor_id_0",
+    "chassis_motor_id_1",
+    "chassis_motor_id_2",
+    "chassis_motor_id_3",
 )
 
 
@@ -182,6 +191,15 @@ def _frame_row_values(frame: TelemetryFrame) -> tuple[object, ...]:
         frame.chassis_cmd_vx,
         frame.chassis_cmd_vy,
         frame.chassis_cmd_wz,
+        frame.capabilities,
+        frame.yaw_flags,
+        frame.pitch_flags,
+        frame.gimbal_enabled,
+        frame.gimbal_startup_ready,
+        frame.chassis_motor_ids[0],
+        frame.chassis_motor_ids[1],
+        frame.chassis_motor_ids[2],
+        frame.chassis_motor_ids[3],
     )
 
 

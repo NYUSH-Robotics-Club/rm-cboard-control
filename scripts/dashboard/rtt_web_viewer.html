@@ -407,6 +407,7 @@
         5: 265,
         6: 284,
         7: 288,
+        8: 300,
       };
 
       // Match firmware modules/algorithm/crc16.c (table starts with 0x0000, 0x1189, ...)
@@ -496,9 +497,9 @@
         store.cmd.vx.push(latest.chassis_cmd_vx);
         store.cmd.vy.push(latest.chassis_cmd_vy);
         store.cmd.wz.push(latest.chassis_cmd_wz);
-        store.referee.status.push(latest.referee_status);
-        store.referee.bulletSpeed.push(latest.shoot_bullet_speed);
-        store.referee.restHeat.push(latest.shoot_rest_heat);
+        store.referee.status.push(latest.dashboard_version >= 8 ? NaN : latest.referee_status);
+        store.referee.bulletSpeed.push(latest.dashboard_version >= 8 ? NaN : latest.shoot_bullet_speed);
+        store.referee.restHeat.push(latest.dashboard_version >= 8 ? NaN : latest.shoot_rest_heat);
         store.referee.shootRate.push(latest.shoot_rate);
       }
 
@@ -594,7 +595,12 @@
         ctx.fillRect(0, 0, width, height);
 
         const valid = series.filter((s) => s.values.some((v) => Number.isFinite(v)));
-        if (!valid.length) return null;
+        if (!valid.length) {
+          ctx.fillStyle = axisTextColor;
+          ctx.font = "13px sans-serif";
+          ctx.fillText("暂无有效数据 / No valid data", 16, 28);
+          return null;
+        }
         const n = timestamps.length;
         if (!n) return null;
 
@@ -674,20 +680,21 @@
           let started = false;
           ctx.beginPath();
           for (let i = 0; i < values.length; i += 1) {
-            if (!Number.isFinite(values[i])) {
+            if (!Number.isFinite(values[i]) || !Number.isFinite(timestamps[i])) {
               started = false;
               continue;
             }
             const x = xScale(timestamps[i]);
             const y = yScale(values[i]);
-            if (!started) {
+            if (!started || (i > 0 && timestamps[i] - timestamps[i - 1] > 250)) {
               ctx.moveTo(x, y);
               started = true;
             } else {
               ctx.lineTo(x, y);
             }
           }
-          if (started) ctx.stroke();
+          // Flush earlier segments even when the newest sample is invalid.
+          ctx.stroke();
         }
 
         if (hoverIndex !== null && hoverIndex >= 0 && hoverIndex < n) {
@@ -718,9 +725,13 @@
         const [hoverIndex, setHoverIndex] = useState(null);
 
         useEffect(() => {
-          if (canvasRef.current) {
-            drawInteractiveLines(canvasRef.current, timestamps, series, hoverIndex, historyWindowMs);
-          }
+          const canvas = canvasRef.current;
+          if (!canvas) return;
+          const redraw = () => drawInteractiveLines(canvas, timestamps, series, hoverIndex, historyWindowMs);
+          redraw();
+          const observer = new ResizeObserver(redraw);
+          observer.observe(canvas);
+          return () => observer.disconnect();
         }, [timestamps, series, hoverIndex, historyWindowMs]);
 
         const n = timestamps.length;
@@ -942,7 +953,7 @@
       function App() {
         const wsDefaultUrl = new URL(location.href);
         wsDefaultUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
-        wsDefaultUrl.port = "8765";
+        if (window.RTT_CONFIG?.wsPort) wsDefaultUrl.port = String(window.RTT_CONFIG.wsPort);
         wsDefaultUrl.pathname = "/";
         wsDefaultUrl.search = "";
         wsDefaultUrl.hash = "";
@@ -985,6 +996,7 @@
           syncDrop: 0,
           seqGap: 0,
           dashboardLocked: false,
+          lastFrameAt: 0,
           lastSeq: null,
           lastTimestampMs: null,
           dashboardBytes: 0,
@@ -1206,7 +1218,7 @@
                 gimbal_pitch_encoder_raw: version >= 7 ? readU16() : 0,
               });
 
-              if (version === 7 || version === 6 || version === 5) {
+              if (version >= 5) {
                 const refereeGameStateRaw = readU8();
                 const refereeStageRemainTime = readU16();
                 const refereeRobotId = readU8();
@@ -1496,11 +1508,22 @@
                 vision_send_bullet_count: readU16(),
               });
 
+              // v8 carries validity separately; NaN values remain gaps in plots.
+              if (version >= 8) {
+                latest.capabilities = readU32();
+                latest.yaw_flags = readU8();
+                latest.pitch_flags = readU8();
+                latest.chassis_motor_ids = [readU8(), readU8(), readU8(), readU8()];
+                latest.gimbal_enabled = readU8();
+                latest.gimbal_startup_ready = readU8();
+              }
+
               if ((store.lastSeq !== null && seq < store.lastSeq) ||
                   (store.lastTimestampMs !== null &&
                    latest.timestamp_ms < store.lastTimestampMs)) {
                 clearDashboardSeries(store);
                 store.seqGap = 0;
+                store.lastSeq = null;
               }
 
               if (store.lastSeq !== null && seq > store.lastSeq + 1) {
@@ -1512,6 +1535,7 @@
               pushDashboardSample(store, latest);
               trimDashboardStore(store, historyWindowRef.current);
 
+              store.lastFrameAt = Date.now();
               store.latest = latest;
               store.frames += 1;
               dashboardBufferRef.current = buf.subarray(frameSize);
@@ -1528,12 +1552,20 @@
           };
         }, [wsUrl]);
 
+        useEffect(() => {
+          const timer = setInterval(() => setRenderVersion((v) => v + 1), 500);
+          return () => clearInterval(timer);
+        }, []);
+
         const s = useMemo(() => storeRef.current, [renderVersion]);
         const latest = s.latest;
+        const stale = !connected || Date.now() - s.lastFrameAt > 1000;
+        const canStatus = (bit) => !latest || latest.dashboard_version < 8 || !(latest.capabilities & 1)
+          ? "N/A" : stale ? "STALE" : ((latest.can_link_bitmap >> bit) & 1) ? "ON" : "OFF";
         const bitOn = (value, bit) => ((value >> bit) & 0x1) === 1;
-        const onOff = (v) => (v ? "ON" : "OFF");
-        const avail = (v) => (v ? "AVAILABLE" : "UNAVAILABLE");
-        const fmtMaybe = (v, digits = 3) => (typeof v === "number" ? v.toFixed(digits) : "N/A");
+        const onOff = (v) => (stale ? "STALE" : v ? "ON" : "OFF");
+        const avail = (v) => (stale ? "STALE" : v ? "AVAILABLE" : "UNAVAILABLE");
+        const fmtMaybe = (v, digits = 3) => (Number.isFinite(v) ? v.toFixed(digits) : "N/A");
         const radToDeg = (v) => (typeof v === "number" ? (v * 180) / Math.PI : undefined);
         const wrapAngleDiffDeg = (diff) => {
           if (!Number.isFinite(diff)) return NaN;
@@ -1587,7 +1619,7 @@
         const visionYawRawDegS = mapSeries(s.vision.recvYawVelRadS, (value) => radToDeg(value));
         const visionPitchRawDegS = mapSeries(s.vision.recvPitchVelRadS, (value) => radToDeg(value));
         const visionYawErrRawToCmd = angleDiffSeries(visionYawRawDeg, s.yawAngle.target);
-        const visionYawErrCmdToActual = angleDiffSeries(s.yawAngle.target, s.yawAngle.actual);
+        const visionYawErrCmdToActual = diffSeries(s.yawAngle.target, s.yawAngle.actual);
         const visionYawErrRawToActual = angleDiffSeries(visionYawRawDeg, s.yawAngle.actual);
         const visionPitchErrRawToCmd = angleDiffSeries(visionPitchRawDeg, s.pitchAngle.target);
         const visionPitchErrCmdToActual = angleDiffSeries(s.pitchAngle.target, s.pitchAngle.actual);
@@ -1601,12 +1633,12 @@
               { name: "dashboard_payload_len_header_low8", value: latest.dashboard_payload_len_header_low8 },
               { name: "dashboard_payload_len_header_matches_low8", value: onOff(latest.dashboard_payload_len_header_matches_low8 !== 0) },
               { name: "timestamp_ms", value: latest.timestamp_ms },
-              { name: "chassis_power (W)", value: latest.chassis_power.toFixed(3) },
-              { name: "chassis_volt (V)", value: latest.chassis_volt.toFixed(3) },
+              { name: "chassis_power (W)", value: fmtMaybe(latest.chassis_power, 3) },
+              { name: "chassis_volt (V)", value: fmtMaybe(latest.chassis_volt, 3) },
               { name: "chassis_power_buffer_energy", value: latest.chassis_power_buffer_energy },
-              { name: "chassis_power_budget_w", value: latest.chassis_power_budget_w.toFixed(3) },
-              { name: "chassis_power_estimated_w", value: latest.chassis_power_estimated_w.toFixed(3) },
-              { name: "chassis_power_scale", value: latest.chassis_power_scale.toFixed(3) },
+              { name: "chassis_power_budget_w", value: fmtMaybe(latest.chassis_power_budget_w, 3) },
+              { name: "chassis_power_estimated_w", value: fmtMaybe(latest.chassis_power_estimated_w, 3) },
+              { name: "chassis_power_scale", value: fmtMaybe(latest.chassis_power_scale, 3) },
               { name: "chassis_power_mode_flags", value: `0x${latest.chassis_power_mode_flags.toString(16).padStart(2, "0")}` },
               { name: "referee_chassis_current (A)", value: (latest.referee_chassis_current * 0.001).toFixed(3) },
               { name: "referee_buffer_energy", value: latest.referee_buffer_energy },
@@ -1627,8 +1659,8 @@
               { name: "shoot_bullet_speed", value: `${latest.shoot_bullet_speed} (${bulletSpeedName(latest.shoot_bullet_speed)})` },
               { name: "shoot_rest_heat", value: latest.shoot_rest_heat },
               { name: "can_link_bitmap", value: `0x${latest.can_link_bitmap.toString(16).padStart(2, "0")}` },
-              { name: "can1_online(bit0)", value: avail(bitOn(latest.can_link_bitmap, 0)) },
-              { name: "can2_online(bit1)", value: avail(bitOn(latest.can_link_bitmap, 1)) },
+              { name: "can1_recent_feedback(bit0)", value: canStatus(0) },
+              { name: "can2_recent_feedback(bit1)", value: canStatus(1) },
               { name: "telemetry_drop_count", value: latest.telemetry_drop_count },
               { name: "free_heap_bytes", value: latest.free_heap_bytes },
             ]
@@ -1639,23 +1671,23 @@
               { name: "motor_online_bitmap", value: `0x${latest.motor_online_bitmap.toString(16).padStart(2, "0")}` },
               { name: "gimbal_motor_online_bitmap", value: `0x${latest.gimbal_motor_online_bitmap.toString(16).padStart(2, "0")}` },
               { name: "shoot_motor_online_bitmap", value: `0x${latest.shoot_motor_online_bitmap.toString(16).padStart(2, "0")}` },
-              { name: "motor_online_lf", value: avail(bitOn(latest.motor_online_bitmap, 0)) },
-              { name: "motor_online_rf", value: avail(bitOn(latest.motor_online_bitmap, 1)) },
-              { name: "motor_online_lb", value: avail(bitOn(latest.motor_online_bitmap, 2)) },
-              { name: "motor_online_rb", value: avail(bitOn(latest.motor_online_bitmap, 3)) },
+              { name: "motor_online[0]", value: avail(bitOn(latest.motor_online_bitmap, 0)) },
+              { name: "motor_online[1]", value: avail(bitOn(latest.motor_online_bitmap, 1)) },
+              { name: "motor_online[2]", value: avail(bitOn(latest.motor_online_bitmap, 2)) },
+              { name: "motor_online[3]", value: avail(bitOn(latest.motor_online_bitmap, 3)) },
               { name: "gimbal_yaw_online", value: avail(bitOn(latest.gimbal_motor_online_bitmap, 0)) },
               { name: "gimbal_pitch_online", value: avail(bitOn(latest.gimbal_motor_online_bitmap, 1)) },
               { name: "shoot_loader_online", value: avail(bitOn(latest.shoot_motor_online_bitmap, 0)) },
               { name: "shoot_friction_l_online", value: avail(bitOn(latest.shoot_motor_online_bitmap, 1)) },
               { name: "shoot_friction_r_online", value: avail(bitOn(latest.shoot_motor_online_bitmap, 2)) },
-              { name: "motor_target_rpm_lf", value: latest.motor_target_rpm[0].toFixed(2) },
-              { name: "motor_target_rpm_rf", value: latest.motor_target_rpm[1].toFixed(2) },
-              { name: "motor_target_rpm_lb", value: latest.motor_target_rpm[2].toFixed(2) },
-              { name: "motor_target_rpm_rb", value: latest.motor_target_rpm[3].toFixed(2) },
-              { name: "motor_rpm_lf", value: latest.motor_rpm[0].toFixed(2) },
-              { name: "motor_rpm_rf", value: latest.motor_rpm[1].toFixed(2) },
-              { name: "motor_rpm_lb", value: latest.motor_rpm[2].toFixed(2) },
-              { name: "motor_rpm_rb", value: latest.motor_rpm[3].toFixed(2) },
+              { name: "motor_target_rpm[0]", value: fmtMaybe(latest.motor_target_rpm[0], 2) },
+              { name: "motor_target_rpm[1]", value: fmtMaybe(latest.motor_target_rpm[1], 2) },
+              { name: "motor_target_rpm[2]", value: fmtMaybe(latest.motor_target_rpm[2], 2) },
+              { name: "motor_target_rpm[3]", value: fmtMaybe(latest.motor_target_rpm[3], 2) },
+              { name: "motor_rpm[0]", value: fmtMaybe(latest.motor_rpm[0], 2) },
+              { name: "motor_rpm[1]", value: fmtMaybe(latest.motor_rpm[1], 2) },
+              { name: "motor_rpm[2]", value: fmtMaybe(latest.motor_rpm[2], 2) },
+              { name: "motor_rpm[3]", value: fmtMaybe(latest.motor_rpm[3], 2) },
             ]
           : [];
 
@@ -1707,32 +1739,32 @@
 
         const imuItems = latest
           ? [
-              { name: "imu_pitch_deg", value: latest.imu_angle_deg[0].toFixed(3) },
-              { name: "imu_yaw_deg", value: latest.imu_angle_deg[1].toFixed(3) },
-              { name: "imu_roll_deg", value: latest.imu_angle_deg[2].toFixed(3) },
-              { name: "imu_gyro_x_deg_s", value: latest.imu_gyro_deg_s[0].toFixed(3) },
-              { name: "imu_gyro_y_deg_s", value: latest.imu_gyro_deg_s[1].toFixed(3) },
-              { name: "imu_gyro_z_deg_s", value: latest.imu_gyro_deg_s[2].toFixed(3) },
-              { name: "gimbal_yaw_target_deg", value: latest.gimbal_yaw_target_deg.toFixed(3) },
-              { name: "gimbal_yaw_actual_deg", value: latest.gimbal_yaw_actual_deg.toFixed(3) },
-              { name: "gimbal_yaw_target_deg_s", value: latest.gimbal_yaw_target_deg_s.toFixed(3) },
-              { name: "gimbal_yaw_actual_deg_s", value: latest.gimbal_yaw_actual_deg_s.toFixed(3) },
-              { name: "gimbal_pitch_target_deg", value: latest.gimbal_pitch_target_deg.toFixed(3) },
-              { name: "gimbal_pitch_actual_deg", value: latest.gimbal_pitch_actual_deg.toFixed(3) },
-              { name: "gimbal_pitch_target_deg_s", value: latest.gimbal_pitch_target_deg_s.toFixed(3) },
-              { name: "gimbal_pitch_actual_deg_s", value: latest.gimbal_pitch_actual_deg_s.toFixed(3) },
+              { name: "imu_pitch_deg", value: fmtMaybe(latest.imu_angle_deg[0], 3) },
+              { name: "imu_yaw_deg", value: fmtMaybe(latest.imu_angle_deg[1], 3) },
+              { name: "imu_roll_deg", value: fmtMaybe(latest.imu_angle_deg[2], 3) },
+              { name: "imu_gyro_x_deg_s", value: fmtMaybe(latest.imu_gyro_deg_s[0], 3) },
+              { name: "imu_gyro_y_deg_s", value: fmtMaybe(latest.imu_gyro_deg_s[1], 3) },
+              { name: "imu_gyro_z_deg_s", value: fmtMaybe(latest.imu_gyro_deg_s[2], 3) },
+              { name: "gimbal_yaw_target_deg", value: fmtMaybe(latest.gimbal_yaw_target_deg, 3) },
+              { name: "gimbal_yaw_actual_deg", value: fmtMaybe(latest.gimbal_yaw_actual_deg, 3) },
+              { name: "gimbal_yaw_target_deg_s", value: fmtMaybe(latest.gimbal_yaw_target_deg_s, 3) },
+              { name: "gimbal_yaw_actual_deg_s", value: fmtMaybe(latest.gimbal_yaw_actual_deg_s, 3) },
+              { name: "gimbal_pitch_target_deg", value: fmtMaybe(latest.gimbal_pitch_target_deg, 3) },
+              { name: "gimbal_pitch_actual_deg", value: fmtMaybe(latest.gimbal_pitch_actual_deg, 3) },
+              { name: "gimbal_pitch_target_deg_s", value: fmtMaybe(latest.gimbal_pitch_target_deg_s, 3) },
+              { name: "gimbal_pitch_actual_deg_s", value: fmtMaybe(latest.gimbal_pitch_actual_deg_s, 3) },
               { name: "gimbal_yaw_encoder_raw", value: String(latest.gimbal_yaw_encoder_raw) },
               { name: "gimbal_pitch_encoder_raw", value: String(latest.gimbal_pitch_encoder_raw) },
-              { name: "gimbal_cmd_yaw_deg", value: latest.gimbal_cmd_yaw_deg.toFixed(3) },
-              { name: "gimbal_cmd_pitch_deg", value: latest.gimbal_cmd_pitch_deg.toFixed(3) },
-              { name: "gimbal_cmd_chassis_rotate_wz", value: latest.gimbal_cmd_chassis_rotate_wz.toFixed(3) },
-              { name: "chassis_cmd_vx", value: latest.chassis_cmd_vx.toFixed(3) },
-              { name: "chassis_cmd_vy", value: latest.chassis_cmd_vy.toFixed(3) },
-              { name: "chassis_cmd_wz", value: latest.chassis_cmd_wz.toFixed(3) },
-              { name: "shoot_rate", value: latest.shoot_rate.toFixed(3) },
-              { name: "shoot_loader_speed_aps", value: latest.shoot_loader_speed_aps.toFixed(3) },
-              { name: "shoot_friction_l_speed_aps", value: latest.shoot_friction_l_speed_aps.toFixed(3) },
-              { name: "shoot_friction_r_speed_aps", value: latest.shoot_friction_r_speed_aps.toFixed(3) },
+              { name: "gimbal_cmd_yaw_deg", value: fmtMaybe(latest.gimbal_cmd_yaw_deg, 3) },
+              { name: "gimbal_cmd_pitch_deg", value: fmtMaybe(latest.gimbal_cmd_pitch_deg, 3) },
+              { name: "gimbal_cmd_chassis_rotate_wz", value: fmtMaybe(latest.gimbal_cmd_chassis_rotate_wz, 3) },
+              { name: "chassis_cmd_vx", value: fmtMaybe(latest.chassis_cmd_vx, 3) },
+              { name: "chassis_cmd_vy", value: fmtMaybe(latest.chassis_cmd_vy, 3) },
+              { name: "chassis_cmd_wz", value: fmtMaybe(latest.chassis_cmd_wz, 3) },
+              { name: "shoot_rate", value: fmtMaybe(latest.shoot_rate, 3) },
+              { name: "shoot_loader_speed_aps", value: fmtMaybe(latest.shoot_loader_speed_aps, 3) },
+              { name: "shoot_friction_l_speed_aps", value: fmtMaybe(latest.shoot_friction_l_speed_aps, 3) },
+              { name: "shoot_friction_r_speed_aps", value: fmtMaybe(latest.shoot_friction_r_speed_aps, 3) },
             ]
           : [];
 
@@ -1790,9 +1822,9 @@
               { name: "referee_chassis_current (A)", value: (latest.referee_chassis_current * 0.001).toFixed(3) },
               { name: "referee_buffer_energy", value: latest.referee_buffer_energy },
               { name: "chassis_power_buffer_energy", value: latest.chassis_power_buffer_energy },
-              { name: "chassis_power_budget_w", value: latest.chassis_power_budget_w.toFixed(3) },
-              { name: "chassis_power_estimated_w", value: latest.chassis_power_estimated_w.toFixed(3) },
-              { name: "chassis_power_scale", value: latest.chassis_power_scale.toFixed(3) },
+              { name: "chassis_power_budget_w", value: fmtMaybe(latest.chassis_power_budget_w, 3) },
+              { name: "chassis_power_estimated_w", value: fmtMaybe(latest.chassis_power_estimated_w, 3) },
+              { name: "chassis_power_scale", value: fmtMaybe(latest.chassis_power_scale, 3) },
               { name: "chassis_power_mode_flags", value: `0x${latest.chassis_power_mode_flags.toString(16).padStart(2, "0")}` },
               { name: "referee_shooter_barrel_cooling_value", value: latest.referee_shooter_barrel_cooling_value },
               { name: "referee_shooter_barrel_heat_limit", value: latest.referee_shooter_barrel_heat_limit },
@@ -1811,13 +1843,38 @@
               { name: "shoot_friction_mode", value: latest.shoot_friction_mode },
               { name: "shoot_bullet_speed", value: `${latest.shoot_bullet_speed} (${bulletSpeedName(latest.shoot_bullet_speed)})` },
               { name: "shoot_rest_heat", value: latest.shoot_rest_heat },
-              { name: "shoot_rate", value: latest.shoot_rate.toFixed(3) },
+              { name: "shoot_rate", value: fmtMaybe(latest.shoot_rate, 3) },
               { name: "telemetry_drop_count", value: latest.telemetry_drop_count },
               { name: "can_link_bitmap", value: `0x${latest.can_link_bitmap.toString(16).padStart(2, "0")}` },
-              { name: "can1_online(bit0)", value: avail(bitOn(latest.can_link_bitmap, 0)) },
-              { name: "can2_online(bit1)", value: avail(bitOn(latest.can_link_bitmap, 1)) },
+              { name: "can1_recent_feedback(bit0)", value: canStatus(0) },
+              { name: "can2_recent_feedback(bit1)", value: canStatus(1) },
             ]
           : [];
+
+        // Legacy integer placeholders have no NaN encoding; mark unsupported fields.
+        if (latest?.dashboard_version >= 8) {
+          basicItems.push(
+            { name: "capabilities", value: latest.capabilities },
+            { name: "gimbal_enabled", value: latest.gimbal_enabled },
+            { name: "gimbal_startup_ready", value: latest.gimbal_startup_ready },
+            { name: "yaw_flags", value: latest.yaw_flags },
+            { name: "pitch_flags", value: latest.pitch_flags },
+            { name: "chassis_motor_ids", value: latest.chassis_motor_ids.join(", ") },
+          );
+          for (const rows of [basicItems, motorItems, remoteItems, imuItems, refereeItems,
+                              visionMetaItems, visionRecvProtoItems, visionSendProtoItems]) {
+            for (const item of rows) {
+              if (item.name === "status_gimbal_cmd_updated(bit5)") item.name = "gimbal_enabled(bit5)";
+              if (item.name === "status_chassis_cmd_updated(bit6)") item.name = "chassis_enabled(bit6)";
+              if (/^(referee|shoot|vision|gimbal_to_vision|free_heap|remote_control_flags|remote_button_bits|remote_mode_switch|chassis_mode|gimbal_mode|chassis_power_buffer|chassis_power_mode|status_referee|status_shoot|keyboard_mode|emergency_stop)/.test(item.name))
+                item.value = "N/A（未接入）";
+              if (/^(rc_|mouse_|key_|remote_protocol)/.test(item.name) && !(latest.status_flags & 2))
+                item.value = "N/A（遥控离线）";
+              if (item.name === "gimbal_yaw_encoder_raw" && !(latest.yaw_flags & 4)) item.value = "N/A";
+              if (item.name === "gimbal_pitch_encoder_raw" && !(latest.pitch_flags & 4)) item.value = "N/A";
+            }
+          }
+        }
 
         return (
           <div className="app">
@@ -1832,11 +1889,11 @@
                   <div className={`pill ${connected ? "pill-good" : "pill-bad"}`}>WS: {connected ? "CONNECTED" : "DISCONNECTED"}</div>
                   <div className="pill">frames: {s.frames}</div>
                   <div className="pill">window: {historyWindowSec}s</div>
-                  <div className={`pill ${latest && bitOn(latest.can_link_bitmap, 0) ? "pill-good" : "pill-bad"}`}>
-                    CAN1: {latest ? (bitOn(latest.can_link_bitmap, 0) ? "ON" : "OFF") : "-"}
+                  <div className={`pill ${canStatus(0) === "ON" ? "pill-good" : "pill-bad"}`}>
+                    CAN1 RX: {canStatus(0)}
                   </div>
-                  <div className={`pill ${latest && bitOn(latest.can_link_bitmap, 1) ? "pill-good" : "pill-bad"}`}>
-                    CAN2: {latest ? (bitOn(latest.can_link_bitmap, 1) ? "ON" : "OFF") : "-"}
+                  <div className={`pill ${canStatus(1) === "ON" ? "pill-good" : "pill-bad"}`}>
+                    CAN2 RX: {canStatus(1)}
                   </div>
                   <div className="pill">seq_gap: {s.seqGap}</div>
                   <div className="pill">crc_err: {s.crcError}</div>
@@ -1845,6 +1902,12 @@
               </div>
             </div>
 
+            <div className="panel row muted">
+              {stale ? "数据未更新；曲线仅保留历史记录。 " : ""}
+              {latest?.dashboard_version >= 8
+                ? "空白/断线表示未接入、已过期或该控制环未启用。CAN RX 表示最近 100 ms 收到电机反馈。裁判、视觉、射击数据尚未接入。"
+                : "旧版固件没有数据有效性标记，零值及 OFF 不可据此判断硬件状态；请烧录新版固件。"}
+            </div>
             <div className="panel row">
               <div className="tabs">
                 <button className={`tab ${tab === "motors" ? "active" : ""}`} onClick={() => setTab("motors")}>Motors</button>
@@ -1861,7 +1924,7 @@
                 {[0, 1, 2, 3].map((i) => (
                   <LineChartPanel
                     key={i}
-                    title={`Motor ${["LF", "RF", "LB", "RB"][i]}`}
+                    title={`Motor ${latest?.dashboard_version >= 8 ? (latest.chassis_motor_ids[i] || "N/A") : ["LF", "RF", "LB", "RB"][i]}`}
                     timestamps={s.timeline}
                     historyWindowMs={historyWindowMs}
                     meta={`window=${historyWindowSec}s points=${s.motors[i].target.length}`}
@@ -1872,7 +1935,7 @@
                   />
                 ))}
                 <LineChartPanel
-                  title="Chassis Cmd"
+                  title="Chassis Cmd (normalized)"
                   timestamps={s.timeline}
                   historyWindowMs={historyWindowMs}
                   meta={`window=${historyWindowSec}s points=${s.cmd.vx.length}`}

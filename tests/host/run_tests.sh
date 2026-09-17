@@ -35,6 +35,7 @@ common_flags="-std=c11 -Wall -Wextra -Werror"
   -I"$repo_root/modules/motor" -I"$repo_root/modules/algorithm" -I"$repo_root/modules/can_comm" \
   -I"$repo_root/modules/debug_print" -I"$repo_root/modules/remote" -I"$repo_root/modules/logger" \
   -I"$repo_root/modules/message_center" -I"$repo_root/services/motor" \
+  -I"$repo_root/application/dashboard" "$repo_root/tests/host/stubs/dashboard.c" \
   "$repo_root/application/gimbal/gimbal_controller.c" "$repo_root/application/gimbal/yaw_reference.c" \
   "$repo_root/application/shoot/shooter_controller.c" \
   "$repo_root/modules/algorithm/pid.c" "$repo_root/modules/message_center/message_center.c" \

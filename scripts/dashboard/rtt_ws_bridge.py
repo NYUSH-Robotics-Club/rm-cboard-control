@@ -8,6 +8,7 @@ import asyncio
 import base64
 import binascii
 import http.server
+import json
 from http import HTTPStatus
 import os
 import struct
@@ -119,7 +120,10 @@ class RTTWebSocketBridge:
         self.sent_packets = 0
         self.http_server: http.server.ThreadingHTTPServer | None = None
         self.http_thread: threading.Thread | None = None
-        self.viewer_html = Path(args.viewer_file).read_bytes()
+        # Both shared-port and split-port serving advertise the actual socket port.
+        viewer = Path(args.viewer_file).read_text(encoding="utf-8")
+        config = json.dumps({"wsPort": self.ws_port})
+        self.viewer_html = viewer.replace("</head>", f"<script>window.RTT_CONFIG={config};</script></head>").encode("utf-8")
         self.monitor_parser = FrameParser()
         self.monitor_writer: MonitorWriter | None = None
         self.monitor_error: str | None = None
