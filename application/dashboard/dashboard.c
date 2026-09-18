@@ -14,11 +14,13 @@
 #include "bsp_time.h"
 #include "SEGGER_RTT.h"
 #include <math.h>
+#include <stddef.h>
 #include <stdatomic.h>
 #include <string.h>
 
-_Static_assert(sizeof(DashboardPayload) == 300U, "dashboard v8 payload ABI");
-_Static_assert(sizeof(DashboardFrame) == 310U, "dashboard v8 frame ABI");
+_Static_assert(sizeof(DashboardPayload) == 412U, "dashboard v9 payload ABI");
+_Static_assert(sizeof(DashboardFrame) == 422U, "dashboard v9 frame ABI");
+_Static_assert(offsetof(DashboardPayload, yaw_diag_valid) == 300U, "preserve v8 prefix");
 
 static uint8_t s_initialized;
 static uint32_t s_sequence, s_drop_count;
@@ -193,6 +195,12 @@ void Dashboard_Step(void) {
     .vision_send_pitch_raw_rad = NAN,
     .vision_send_pitch_vel_raw_rad_s = NAN,
     .vision_send_bullet_speed_mps = NAN,
+    .yaw_route_rate = NAN,
+    .yaw_speed_raw_rpm = NAN,
+    .yaw_pid_dt_s = NAN,
+    .yaw_pid_pout = NAN, .yaw_pid_iout = NAN, .yaw_pid_dout = NAN, .yaw_pid_output = NAN,
+    .yaw_pid_kp = NAN, .yaw_pid_ki = NAN, .yaw_pid_kd = NAN,
+    .yaw_pid_output_max = NAN, .yaw_pid_integral_max = NAN,
   };
   DashboardPayload *p = &frame.payload;
   const uint32_t now = BspTime_NowMs();
@@ -201,7 +209,7 @@ void Dashboard_Step(void) {
   p->remote_packed = 3U << 6; /* 未收到遥控时模式未知，不伪造C档。 */
   fill_sources(p, now);
   p->capabilities |= DASHBOARD_GIMBAL;
-  bool fresh = monitor.magic == 0x474D4F4EU && monitor.version == 1U &&
+  bool fresh = monitor.magic == 0x474D4F4EU && monitor.version == GIMBAL_MONITOR_VERSION &&
       monitor.size_bytes == sizeof(monitor) && (uint32_t)(now - monitor.tick_ms) <= 100U;
   if (fresh) {
     p->status_flags |= 0x08U;
@@ -230,10 +238,48 @@ void Dashboard_Step(void) {
       p->gimbal_yaw_target_deg = monitor.yaw.position_target_ticks * (360.0f / 8192.0f);
     if (monitor.pitch.flags & GIMBAL_MONITOR_POSITION_ACTIVE)
       p->gimbal_pitch_target_deg = monitor.pitch.position_target_ticks * (360.0f / 8192.0f);
-    if (monitor.yaw.flags & GIMBAL_MONITOR_CONTROL_ACTIVE)
+    if (monitor.yaw.flags & GIMBAL_MONITOR_CONTROL_ACTIVE) {
+      /* 回调仍维护连续角度参考。仅速度环时单独发布，不能冒充位置闭环目标。 */
+      p->gimbal_cmd_yaw_deg = monitor.yaw.position_target_ticks * (360.0f / 8192.0f);
       p->gimbal_yaw_target_deg_s = monitor.yaw.speed_target_rpm * 6.0f;
+    }
     if (monitor.pitch.flags & GIMBAL_MONITOR_CONTROL_ACTIVE)
       p->gimbal_pitch_target_deg_s = monitor.pitch.speed_target_rpm * 6.0f;
+    /* 来源随命令走，不能使用fill_sources中的最新RC替代本次PID实际用到的输入。 */
+    p->yaw_diag_valid = 1U;
+    p->yaw_sample_ms = monitor.tick_ms;
+    p->yaw_callback_count = monitor.callback_count;
+    p->yaw_callback_dt_ms = monitor.callback_dt_ms;
+    p->yaw_trace_flags = monitor.command_trace.flags;
+    p->yaw_rc_sequence = monitor.command_trace.rc_sequence;
+    p->yaw_rc_dispatch_ms = monitor.command_trace.rc_dispatch_ms;
+    p->yaw_route_sequence = monitor.command_trace.route_sequence;
+    p->yaw_route_ms = monitor.command_trace.route_ms;
+    p->yaw_rc_ch0 = monitor.command_trace.rc_ch0;
+    p->yaw_route_rate = monitor.yaw_route_rate;
+    p->yaw_mode = monitor.yaw_mode;
+    p->yaw_feedback_ms = monitor.yaw.feedback_ms;
+    p->yaw_speed_raw_rpm = (monitor.yaw.flags & GIMBAL_MONITOR_FEEDBACK_FRESH) ?
+        monitor.yaw.speed_actual_rpm : NAN;
+    p->yaw_pid_dt_s = (monitor.yaw.flags & GIMBAL_MONITOR_CONTROL_ACTIVE) ?
+        monitor.yaw.speed_loop_dt_s : NAN;
+    p->yaw_command_unit = monitor.yaw.command_unit;
+    p->yaw_command_status = monitor.yaw.command_status;
+    p->yaw_command_raw = monitor.yaw.command_raw;
+    p->yaw_current_actual_raw = monitor.yaw.current_actual_raw;
+    if (monitor.yaw.flags & GIMBAL_MONITOR_PRESENT) {
+      p->yaw_pid_kp = monitor.yaw_pid_kp;
+      p->yaw_pid_ki = monitor.yaw_pid_ki;
+      p->yaw_pid_kd = monitor.yaw_pid_kd;
+      p->yaw_pid_output_max = monitor.yaw_pid_output_max;
+      p->yaw_pid_integral_max = monitor.yaw_pid_integral_max;
+    }
+    if (monitor.yaw.flags & GIMBAL_MONITOR_CONTROL_ACTIVE) {
+      p->yaw_pid_pout = monitor.yaw_pid_pout;
+      p->yaw_pid_iout = monitor.yaw_pid_iout;
+      p->yaw_pid_dout = monitor.yaw_pid_dout;
+      p->yaw_pid_output = monitor.yaw_pid_output;
+    }
   }
   p->telemetry_drop_count = s_drop_count;
   frame.crc16 = dashboard_crc16((const uint8_t *)&frame, (uint16_t)(sizeof(frame) - sizeof(frame.crc16)));

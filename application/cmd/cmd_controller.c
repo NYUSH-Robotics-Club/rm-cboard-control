@@ -9,6 +9,7 @@
 #include "bsp_can.h"
 #include "motor_service.h"
 #include "robot_config.h"
+#include "bsp_time.h"
 #include <math.h>
 #include <string.h>
 
@@ -21,6 +22,10 @@ static bool s_remote_seen;
 static uint32_t s_last_remote_ms;
 static bool s_neutral_seen;
 static uint32_t s_neutral_since_ms;
+/* 派发上下文独占；计数是已交付消息，不是UART接收帧数。 */
+static uint32_t s_rc_sequence, s_rc_dispatch_ms, s_route_sequence;
+
+_Static_assert(sizeof(GimbalCmd) <= MC_MAX_PAYLOAD, "gimbal command exceeds message slot");
 
 #define REMOTE_LOSS_TIMEOUT_MS (200U)
 
@@ -56,6 +61,8 @@ static void on_rc_update(const MsgEvent *event, void *user_data) {
     (void)user_data;
     if (event->size == sizeof(s_input.remote)) {
         memcpy(&s_input.remote, event->data, sizeof(s_input.remote));
+        ++s_rc_sequence;
+        s_rc_dispatch_ms = BspTime_NowMs();
         s_remote_updated = true;
     }
 }
@@ -95,6 +102,7 @@ void CmdController_Init(void) {
     s_remote_updated = false;
     s_remote_seen = false;
     s_last_remote_ms = 0U;
+    s_rc_sequence = s_rc_dispatch_ms = s_route_sequence = 0U;
     CommandRouter_Init(&s_router);
 
     (void)MsgCenter_Subscribe(TOPIC_RC_UPDATE, on_rc_update, NULL);
@@ -149,6 +157,21 @@ void CmdController_Task(uint32_t current_tick) {
         return;
     }
     s_input.vision_updated = false;
+
+    /* 把本次路由实际使用的输入随结果发送，避免与下一条RC消息错配。 */
+    s_output.gimbal.trace = (GimbalCommandTrace){
+        .flags = GIMBAL_TRACE_PRESENT |
+            (s_remote_seen ? GIMBAL_TRACE_RC_SEEN : 0U) |
+            (remote_online ? GIMBAL_TRACE_RC_ONLINE : 0U) |
+            (BspCan_OutputsArmed() ? GIMBAL_TRACE_OUTPUTS_ARMED : 0U) |
+            (s_output.gimbal.vision_valid ? GIMBAL_TRACE_VISION_REQUESTED : 0U) |
+            (s_output.gimbal.yaw_rate_memo > 0.5f ? GIMBAL_TRACE_SPIN_REQUESTED : 0U),
+        .rc_sequence = s_rc_sequence,
+        .rc_dispatch_ms = s_rc_dispatch_ms,
+        .route_sequence = ++s_route_sequence,
+        .route_ms = current_tick,
+        .rc_ch0 = s_input.remote.rc.ch[0],
+    };
 
     float yaw_error_deg =
         s_output.spin_hold_yaw_deg - s_input.sensor.yaw_total_angle;

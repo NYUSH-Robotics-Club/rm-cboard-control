@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Display firmware telemetry and its validity; reference curves never change motor control. -->
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -408,6 +409,7 @@
         6: 284,
         7: 288,
         8: 300,
+        9: 412,
       };
 
       // Match firmware modules/algorithm/crc16.c (table starts with 0x0000, 0x1189, ...)
@@ -448,6 +450,7 @@
         for (const arr of store.imuAngle) arr.length = 0;
         for (const arr of store.imuGyro) arr.length = 0;
         store.yawAngle.target.length = 0;
+        store.yawAngle.reference.length = 0;
         store.yawAngle.actual.length = 0;
         store.yawSpeed.target.length = 0;
         store.yawSpeed.actual.length = 0;
@@ -481,6 +484,10 @@
           store.imuGyro[i].push(latest.imu_gyro_deg_s[i]);
         }
         store.yawAngle.target.push(latest.gimbal_yaw_target_deg);
+        // Keep the speed-only callback reference separate from a closed-loop target.
+        store.yawAngle.reference.push(latest.dashboard_version >= 8 &&
+          (latest.yaw_flags & 8) && !(latest.yaw_flags & 16)
+          ? latest.gimbal_cmd_yaw_deg : NaN);
         store.yawAngle.actual.push(latest.gimbal_yaw_actual_deg);
         store.yawSpeed.target.push(latest.gimbal_yaw_target_deg_s);
         store.yawSpeed.actual.push(latest.gimbal_yaw_actual_deg_s);
@@ -529,6 +536,7 @@
         for (const arr of store.imuAngle) trimLeading(arr, trimCount);
         for (const arr of store.imuGyro) trimLeading(arr, trimCount);
         trimLeading(store.yawAngle.target, trimCount);
+        trimLeading(store.yawAngle.reference, trimCount);
         trimLeading(store.yawAngle.actual, trimCount);
         trimLeading(store.yawSpeed.target, trimCount);
         trimLeading(store.yawSpeed.actual, trimCount);
@@ -573,6 +581,56 @@
         const prev = timestamps[lo - 1];
         const curr = timestamps[lo];
         return Math.abs(curr - target) < Math.abs(target - prev) ? lo : lo - 1;
+      }
+
+      function yawTargetStatus(latest) {
+        if (!latest || latest.dashboard_version < 8) return "旧版数据：目标有效性未知";
+        if (!(latest.status_flags & 8)) return "云台快照过期：等待新数据";
+        if (!latest.gimbal_enabled) return "控制未启用：目标无效";
+        if (!latest.gimbal_startup_ready) return "等待启动对齐：目标无效";
+        if (!(latest.yaw_flags & 8)) return "控制目标无效：请检查反馈连续性和电机服务状态";
+        return (latest.yaw_flags & 16) ? "位置环已启用" : "速度环已启用；角度参考未参与闭环";
+      }
+
+      // Current readouts use one received frame; never replace NaN with zero or an older target.
+      function yawSpeedReadout(latest, connected, lastFrameAt, nowMs) {
+        const ageMs = lastFrameAt ? Math.max(0, nowMs - lastFrameAt) : null;
+        const stale = !connected || ageMs === null || ageMs > 1000;
+        const modern = latest?.dashboard_version >= 8;
+        const fresh = !!latest && !stale && (!modern || !!(latest.status_flags & 8));
+        const active = fresh && (!modern || (latest.gimbal_enabled &&
+          latest.gimbal_startup_ready && (latest.yaw_flags & 8)));
+        const targetValid = !!active && Number.isFinite(latest.gimbal_yaw_target_deg_s);
+        const actualValid = fresh && (!modern || !!(latest.yaw_flags & 4)) &&
+          Number.isFinite(latest.gimbal_yaw_actual_deg_s);
+        let reason;
+        if (!latest) reason = connected ? "等待首帧遥测" : "连接已断开：等待遥测";
+        else if (!connected) reason = "连接已断开：曲线仅保留历史";
+        else if (ageMs === null) reason = "等待本次连接首帧遥测：曲线仅保留历史";
+        else if (stale) reason = "数据超过 1 秒未更新：曲线仅保留历史";
+        else if (targetValid) reason = modern ? "速度目标有效" : "旧版速度值：缺少控制有效性标记";
+        else if (!modern) reason = "旧版固件未提供速度目标";
+        else if (active) reason = "控制已激活，但固件未提供有限速度目标";
+        else reason = yawTargetStatus(latest);
+        const targetText = targetValid ? latest.gimbal_yaw_target_deg_s.toFixed(2) + " °/s" : "—";
+        const actualText = actualValid ? latest.gimbal_yaw_actual_deg_s.toFixed(2) + " °/s" : "—";
+        const stateValue = value => fresh && modern ? String(value) : "—";
+        return { targetText, actualText, reason, items: [
+          { name: "target speed", value: targetText },
+          { name: "actual speed", value: actualText },
+          { name: "速度目标状态", value: reason },
+          { name: "gimbal_enabled", value: stateValue(latest?.gimbal_enabled) },
+          { name: "gimbal_startup_ready", value: stateValue(latest?.gimbal_startup_ready) },
+          { name: "yaw_flags", value: stateValue(latest?.yaw_flags) },
+          { name: "页面最后收帧时间", value: lastFrameAt ? new Date(lastFrameAt).toLocaleTimeString() : "—" },
+          { name: "距最后收帧", value: ageMs === null ? "—" : `${ageMs} ms` },
+          { name: "采样帧 / MCU 时间", value: latest ? `${latest.seq} / ${latest.timestamp_ms} ms` : "—" },
+        ] };
+      }
+
+      function latestSeriesValue(values) {
+        const value = values[values.length - 1];
+        return Number.isFinite(value) ? value.toFixed(2) : "N/A";
       }
 
       function drawInteractiveLines(canvas, timestamps, series, hoverIndex, historyWindowMs) {
@@ -673,9 +731,12 @@
         ctx.lineTo(left + innerW, top + innerH);
         ctx.stroke();
 
-        for (const s of valid) {
+        // Draw target dashes over actual lines so equal values remain distinguishable.
+        const paintOrder = [...valid].sort((a, b) => Number(!!a.foreground) - Number(!!b.foreground));
+        for (const s of paintOrder) {
           ctx.strokeStyle = s.color;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = s.lineWidth || 1.5;
+          ctx.setLineDash(s.dash || []);
           const values = s.values;
           let started = false;
           ctx.beginPath();
@@ -696,6 +757,7 @@
           // Flush earlier segments even when the newest sample is invalid.
           ctx.stroke();
         }
+        ctx.setLineDash([]);
 
         if (hoverIndex !== null && hoverIndex >= 0 && hoverIndex < n) {
           const x = xScale(timestamps[hoverIndex]);
@@ -774,8 +836,8 @@
             <div className="legend">
               {series.map((s, idx) => (
                 <span key={s.name} className="legend-item">
-                  <span className="legend-dot" style={{ background: s.color }} />
-                  <span>{s.name}</span>
+                  <span style={{ width: 18, borderTop: `2px ${s.dash ? "dashed" : "solid"} ${s.color}` }} />
+                  <span>{s.name}: {s.displayValue ?? latestSeriesValue(s.values)}</span>
                 </span>
               ))}
             </div>
@@ -1011,7 +1073,7 @@
           ],
           imuAngle: [[], [], []],
           imuGyro: [[], [], []],
-          yawAngle: { target: [], actual: [] },
+          yawAngle: { target: [], reference: [], actual: [] },
           yawSpeed: { target: [], actual: [] },
           pitchAngle: { target: [], actual: [] },
           pitchSpeed: { target: [], actual: [] },
@@ -1055,6 +1117,8 @@
               dashboardBufferRef.current = new Uint8Array(0);
               const store = storeRef.current;
               store.dashboardLocked = false;
+              // A new socket must receive its own frame before old values are shown as current.
+              store.lastFrameAt = 0;
               store.lastSeq = null;
               store.lastTimestampMs = null;
               setConnected(true);
@@ -1518,6 +1582,39 @@
                 latest.gimbal_startup_ready = readU8();
               }
 
+              // v9 is one completed yaw callback, including its consumed RC source.
+              if (version >= 9) {
+                const readI32 = () => { const value = dv.getInt32(offset, true); offset += 4; return value; };
+                latest.yaw_diag_valid = readU32();
+                latest.yaw_sample_ms = readU32();
+                latest.yaw_callback_count = readU32();
+                latest.yaw_callback_dt_ms = readU32();
+                latest.yaw_trace_flags = readU32();
+                latest.yaw_rc_sequence = readU32();
+                latest.yaw_rc_dispatch_ms = readU32();
+                latest.yaw_route_sequence = readU32();
+                latest.yaw_route_ms = readU32();
+                latest.yaw_rc_ch0 = readI32();
+                latest.yaw_route_rate = readF32();
+                latest.yaw_mode = readU32();
+                latest.yaw_feedback_ms = readU32();
+                latest.yaw_speed_raw_rpm = readF32();
+                latest.yaw_pid_dt_s = readF32();
+                latest.yaw_command_unit = readU32();
+                latest.yaw_command_status = readI32();
+                latest.yaw_command_raw = readI32();
+                latest.yaw_current_actual_raw = readI32();
+                latest.yaw_pid_pout = readF32();
+                latest.yaw_pid_iout = readF32();
+                latest.yaw_pid_dout = readF32();
+                latest.yaw_pid_output = readF32();
+                latest.yaw_pid_kp = readF32();
+                latest.yaw_pid_ki = readF32();
+                latest.yaw_pid_kd = readF32();
+                latest.yaw_pid_output_max = readF32();
+                latest.yaw_pid_integral_max = readF32();
+              }
+
               if ((store.lastSeq !== null && seq < store.lastSeq) ||
                   (store.lastTimestampMs !== null &&
                    latest.timestamp_ms < store.lastTimestampMs)) {
@@ -1560,6 +1657,8 @@
         const s = useMemo(() => storeRef.current, [renderVersion]);
         const latest = s.latest;
         const stale = !connected || Date.now() - s.lastFrameAt > 1000;
+        const yawReadout = yawSpeedReadout(latest, connected, s.lastFrameAt, Date.now());
+        const yawStatus = stale ? "数据未更新：显示最后采样" : yawTargetStatus(latest);
         const canStatus = (bit) => !latest || latest.dashboard_version < 8 || !(latest.capabilities & 1)
           ? "N/A" : stale ? "STALE" : ((latest.can_link_bitmap >> bit) & 1) ? "ON" : "OFF";
         const bitOn = (value, bit) => ((value >> bit) & 0x1) === 1;
@@ -1881,7 +1980,7 @@
             <div className="top">
               <div>
                 <div className="title">RTT Telemetry Dashboard</div>
-                <div className="muted">Realtime dashboard and logger viewer.</div>
+                <div className="muted">Realtime dashboard and logger viewer. · UI 2026-09-17.2</div>
               </div>
               <div className="toolbar">
                 <button className="btn" onClick={openSettings}>Settings</button>
@@ -1950,6 +2049,9 @@
 
             {tab === "imu" ? (
               <div className="grid2 row">
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <GroupPanel title="Yaw 当前速度与控制状态" items={yawReadout.items} />
+                </div>
                 <LineChartPanel
                   title="IMU Angle (deg)"
                   timestamps={s.timeline}
@@ -1976,9 +2078,10 @@
                   title="Gimbal Yaw Angle (deg)"
                   timestamps={s.timeline}
                   historyWindowMs={historyWindowMs}
-                  meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                  meta={`${yawStatus} · window=${historyWindowSec}s points=${s.timeline.length}`}
                   series={[
-                    { name: "target angle", color: "#0f766e", values: s.yawAngle.target },
+                    { name: "target angle（闭环目标）", color: "#0f766e", values: s.yawAngle.target, foreground: true, dash: [6, 4], lineWidth: 2 },
+                    { name: "reference angle（未闭环参考）", color: "#1d4ed8", values: s.yawAngle.reference, foreground: true, dash: [6, 4], lineWidth: 2 },
                     { name: "actual angle", color: "#b54708", values: s.yawAngle.actual },
                   ]}
                 />
@@ -1986,10 +2089,10 @@
                   title="Gimbal Yaw Speed (deg/s)"
                   timestamps={s.timeline}
                   historyWindowMs={historyWindowMs}
-                  meta={`window=${historyWindowSec}s points=${s.timeline.length}`}
+                  meta={`${yawReadout.reason} · window=${historyWindowSec}s points=${s.timeline.length}`}
                   series={[
-                    { name: "target speed", color: "#1d4ed8", values: s.yawSpeed.target },
-                    { name: "actual speed", color: "#a21caf", values: s.yawSpeed.actual },
+                    { name: "target speed", color: "#1d4ed8", values: s.yawSpeed.target, displayValue: yawReadout.targetText, foreground: true, dash: [6, 4], lineWidth: 2 },
+                    { name: "actual speed", color: "#a21caf", values: s.yawSpeed.actual, displayValue: yawReadout.actualText },
                   ]}
                 />
                 <LineChartPanel

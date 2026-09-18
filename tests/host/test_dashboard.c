@@ -64,19 +64,33 @@ int main(void) {
     assert(MsgCenter_Publish(TOPIC_CHASSIS_CMD, &cmd, sizeof(cmd)) == 0);
     MsgCenter_Dispatch();
     g_gimbal_monitor = (GimbalMonitorSnapshot){.sequence = 2, .magic = 0x474D4F4E,
-        .version = 1, .size_bytes = sizeof(GimbalMonitorSnapshot), .tick_ms = now,
+        .version = GIMBAL_MONITOR_VERSION, .size_bytes = sizeof(GimbalMonitorSnapshot), .tick_ms = now,
+        .callback_count = 123, .callback_dt_ms = 4,
+        .command_trace = {.flags = 15, .rc_sequence = 17, .rc_dispatch_ms = 990,
+            .route_sequence = 122, .route_ms = 998, .rc_ch0 = -660},
+        .yaw_route_rate = 1, .yaw_mode = 0,
+        .yaw_pid_pout = 240, .yaw_pid_iout = -2, .yaw_pid_dout = 3, .yaw_pid_output = 230,
+        .yaw_pid_kp = 120, .yaw_pid_ki = 1, .yaw_pid_kd = 0.5f,
+        .yaw_pid_output_max = 6000, .yaw_pid_integral_max = 200,
         .enabled = 1, .startup_ready = 1,
         .yaw = {.flags = 15, .position_actual_ticks = 16384, .position_target_ticks = 8192,
             .speed_actual_rpm = 3, .speed_loop_actual_rpm = 2, .speed_target_rpm = 4,
-            .encoder_raw = 1234},
+            .encoder_raw = 1234, .feedback_ms = 996, .speed_loop_dt_s = 0.004f,
+            .command_raw = 321, .command_status = 0, .command_unit = 2, .current_actual_raw = -1234},
         .pitch = {.flags = 31, .position_actual_ticks = 2048, .position_target_ticks = 1024,
             .speed_actual_rpm = -2, .speed_target_rpm = -3, .encoder_raw = 2048}};
     Dashboard_Step();
-    assert(captured.version == 8 && captured.payload_len == (300 & 255));
+    assert(captured.version == 9 && captured.payload_len == (412 & 255));
+    assert(captured.payload.yaw_diag_valid == 1 && captured.payload.yaw_rc_ch0 == -660);
+    assert(captured.payload.yaw_rc_sequence == 17 && captured.payload.yaw_route_sequence == 122);
+    assert(captured.payload.yaw_command_raw == 321 && captured.payload.yaw_current_actual_raw == -1234);
+    assert(captured.payload.yaw_pid_output == 230 && captured.payload.yaw_pid_pout == 240);
     assert(captured.payload.capabilities == 31);
     assert((captured.payload.link_bitmap_packed & 0x63) == 0x63);
     assert(captured.payload.rc_rocker_r_x == 111 && captured.payload.rc_rocker_l_x == 333);
     assert(isnan(captured.payload.gimbal_yaw_target_deg));
+    assert(captured.payload.gimbal_cmd_yaw_deg == 360);
+    assert(captured.payload.gimbal_yaw_target_deg_s == 24);
     assert(captured.payload.gimbal_yaw_actual_deg == 720);
     assert(captured.payload.gimbal_yaw_actual_deg_s == 12);
     assert(captured.payload.gimbal_pitch_target_deg == 45);
@@ -86,6 +100,9 @@ int main(void) {
     now += 201; Dashboard_Step();
     assert(captured.payload.link_bitmap_packed == 0 && captured.payload.status_flags == 0);
     assert(isnan(captured.payload.gimbal_yaw_actual_deg) && isnan(captured.payload.motor_rpm[0]));
+    assert(isnan(captured.payload.gimbal_cmd_yaw_deg));
+    assert(isnan(captured.payload.gimbal_yaw_target_deg_s));
+    assert(captured.payload.yaw_diag_valid == 0 && isnan(captured.payload.yaw_pid_output));
     assert(isnan(captured.payload.chassis_cmd_vx) && isnan(captured.payload.imu_angle_deg[0])); emit();
     g_gimbal_monitor.sequence = 3; unsigned before = writes; Dashboard_Step(); assert(writes == before);
     g_gimbal_monitor.sequence = 4; g_gimbal_monitor.tick_ms = now;
@@ -93,5 +110,20 @@ int main(void) {
     assert(captured.payload.gimbal_yaw_target_deg == 360); emit();
     full = true; Dashboard_Step(); full = false; Dashboard_Step();
     assert(captured.payload.telemetry_drop_count == 1); emit();
+    /* Fresh feedback alone must not publish stale PID/reference targets. */
+    g_gimbal_monitor.enabled = 0; g_gimbal_monitor.startup_ready = 0;
+    g_gimbal_monitor.yaw.flags = 7; Dashboard_Step();
+    assert(captured.payload.yaw_diag_valid == 1 && isnan(captured.payload.yaw_pid_output));
+    assert(isnan(captured.payload.gimbal_cmd_yaw_deg));
+    assert(isnan(captured.payload.gimbal_yaw_target_deg));
+    assert(isnan(captured.payload.gimbal_yaw_target_deg_s)); emit();
+    /* A valid negative continuous reference must keep its sign and turns. */
+    g_gimbal_monitor.enabled = 1; g_gimbal_monitor.startup_ready = 1;
+    g_gimbal_monitor.yaw.flags = 15;
+    g_gimbal_monitor.yaw.position_target_ticks = -12288;
+    g_gimbal_monitor.yaw.speed_target_rpm = -4; Dashboard_Step();
+    assert(captured.payload.gimbal_cmd_yaw_deg == -540);
+    assert(captured.payload.gimbal_yaw_target_deg_s == -24);
+    assert(isnan(captured.payload.gimbal_yaw_target_deg)); emit();
     return 0;
 }

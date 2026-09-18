@@ -22,6 +22,7 @@ import firmware as fw
 
 MAGIC = 0x474D4F4E
 SIZE = 148
+SNAPSHOT_SIZES = {1: SIZE, 2: 216}  # v2 preserves both axes; extra yaw diagnostics go to RTT.
 HEADER = struct.Struct('<9I')
 AXIS = struct.Struct('<4I3i6fI')
 AXIS_NAMES = ('motor_id', 'flags', 'feedback_ms', 'command_unit', 'command_status',
@@ -31,12 +32,12 @@ AXIS_NAMES = ('motor_id', 'flags', 'feedback_ms', 'command_unit', 'command_statu
 
 
 def decode_snapshot(data, sequence_after, live_tick):
-    """Return a v1 sample, or None if a writer overlapped the read/uninitialized.
+    """Return common v1/v2 axes, or None if a writer overlapped the read/uninitialized.
 
     Ages use wrapping MCU milliseconds. Targets keep validity flags; voltage
     commands and failed requests never become a reported current target.
     """
-    if len(data) != SIZE:
+    if len(data) not in SNAPSHOT_SIZES.values():
         raise fw.Failure('Incomplete monitor snapshot')
     head = HEADER.unpack_from(data)
     seq, magic, version, size, count, tick, period, enabled, ready = head
@@ -44,7 +45,7 @@ def decode_snapshot(data, sequence_after, live_tick):
         return None
     if magic == 0 and count == 0:
         return None
-    if (magic, version, size) != (MAGIC, 1, SIZE):
+    if magic != MAGIC or SNAPSHOT_SIZES.get(version) != size or len(data) != size:
         raise fw.Failure('Unsupported monitor ABI; use matching firmware/tool versions')
     sample = dict(sequence=seq, callback_count=count, tick_ms=tick,
                   callback_dt_ms=period, enabled=enabled, startup_ready=ready,
@@ -61,6 +62,15 @@ def decode_snapshot(data, sequence_after, live_tick):
     return sample
 
 
+def read_snapshot(client, symbols):
+    """Read the ELF-sized block and recheck its sequence; preserve writer-overlap rejection."""
+    address, size = symbols['g_gimbal_monitor']
+    words = client.words(address, size // 4)
+    sequence = client.words(address, 1)[0]
+    tick = client.words(symbols['uwTick'][0], 1)[0]
+    return decode_snapshot(struct.pack(f'<{len(words)}I', *words), sequence, tick)
+
+
 def local_image(elf, gcc, directory):
     """Extract symbol addresses and image from this ELF, never from old offsets."""
     suffix = '.exe' if os.name == 'nt' else ''
@@ -73,8 +83,8 @@ def local_image(elf, gcc, directory):
         parts = line.split()
         if len(parts) == 4 and parts[3] in ('g_gimbal_monitor', 'uwTick'):
             symbols[parts[3]] = (int(parts[0], 16), int(parts[1], 16))
-    if symbols.get('g_gimbal_monitor', (0, 0))[1] != SIZE or symbols.get('uwTick', (0, 0))[1] != 4:
-        raise fw.Failure('ELF lacks the v1 monitor. Build and flash the monitor firmware first.')
+    if symbols.get('g_gimbal_monitor', (0, 0))[1] not in SNAPSHOT_SIZES.values() or symbols.get('uwTick', (0, 0))[1] != 4:
+        raise fw.Failure('ELF lacks a supported monitor. Build and flash the monitor firmware first.')
     for address, size in symbols.values():
         if not 0x20000000 <= address < address+size <= 0x20020000 or address % 4:
             raise fw.Failure('Monitor symbols are outside aligned STM32F407 SRAM')
@@ -228,9 +238,8 @@ def monitor(args):
                 with csv_path.with_suffix('.json').open('x', encoding='utf-8') as metadata:
                     json.dump({'elf': str(elf), 'elf_sha256': fw.sha256(elf),
                         'probe': serial, 'flash_matches_elf': True, 'requested_hz': args.hz,
-                        'symbols': symbols, 'snapshot_version': 1}, metadata, indent=2)
-                address = symbols['g_gimbal_monitor'][0]
-                tick_address = symbols['uwTick'][0]
+                        'symbols': symbols, 'snapshot_version': next(version for version, size in SNAPSHOT_SIZES.items()
+                            if size == symbols['g_gimbal_monitor'][1])}, metadata, indent=2)
                 started = time.monotonic()
                 writer = None
                 previous = None
@@ -240,10 +249,7 @@ def monitor(args):
                 skipped = 0
                 while args.duration == 0 or time.monotonic()-started < args.duration:
                     iteration = time.monotonic()
-                    words = client.words(address, SIZE//4)
-                    sequence = client.words(address, 1)[0]
-                    tick = client.words(tick_address, 1)[0]
-                    sample = decode_snapshot(struct.pack('<37I', *words), sequence, tick)
+                    sample = read_snapshot(client, symbols)
                     if sample is not None:
                         last_good = time.monotonic()
                         sample['host_elapsed_s'] = last_good-started

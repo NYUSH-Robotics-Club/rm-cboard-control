@@ -120,6 +120,8 @@ int main(void)
     CmdController_Task(now_ms);
     MsgCenter_Dispatch();
     assert(RC_GetFrameCount() == 1 && chassis.enabled && gimbal.enabled);
+    assert(gimbal.trace.flags == 15 && gimbal.trace.rc_sequence == 1);
+    assert(gimbal.trace.rc_dispatch_ms == 140 && gimbal.trace.route_ms == 140);
     assert(fabsf(chassis.vx+0.5f)<0.0001f);
     uint8_t snapshot[18]; RC_GetLastFrame(snapshot);
     assert(memcmp(snapshot,frame,18)==0);
@@ -133,6 +135,7 @@ int main(void)
     assert(upstream.channels[3] == 0); /* Original daemon clears decoded state. */
     CmdController_Task(351); MsgCenter_Dispatch();
     assert(!chassis.enabled && !gimbal.enabled);
+    assert(gimbal.trace.flags == (GIMBAL_TRACE_PRESENT | GIMBAL_TRACE_RC_SEEN | GIMBAL_TRACE_OUTPUTS_ARMED));
     test_dma.CR=0; huart3.ErrorCode=4; HAL_UART_ErrorCallback(&huart3);
     assert(d->uart_errors == 1 && d->last_uart_error == 4 && d->last_hal_status == HAL_OK);
     assert(test_dma.CR & DMA_SxCR_EN);
@@ -202,5 +205,26 @@ int main(void)
     follow.yaw_ccw_sign = 1;
     CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(chassis.enabled && fabsf(chassis.vx - 1) < 0.0001f);
-    puts("nyush remote chain: PASS (original registry/decoder/daemon, TC/IDLE, snapshot, BUSY retry without abort, command mapping, loss, error and reconnection)");
+    /* 新RC可先于已发布命令派发；该命令必须保留路由时的来源，不被新RC覆盖。 */
+    remote.rc.s[1] = RC_SW_DOWN;
+    remote.rc.ch[0] = -330;
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch();
+    CmdController_Task(now_ms);
+    uint32_t first_route_ms = now_ms;
+    remote.rc.ch[0] = 330;
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch();
+    assert(gimbal.trace.rc_ch0 == -330 && gimbal.yaw_rate == 0.5f);
+    assert(gimbal.trace.route_ms == first_route_ms && gimbal.trace.rc_dispatch_ms == first_route_ms);
+    uint32_t old_rc_seq = gimbal.trace.rc_sequence, old_route_seq = gimbal.trace.route_sequence;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(gimbal.trace.rc_ch0 == 330 && gimbal.yaw_rate == -0.5f);
+    assert(gimbal.trace.rc_sequence == old_rc_seq + 1 && gimbal.trace.route_sequence == old_route_seq + 1);
+    assert(gimbal.trace.rc_dispatch_ms == now_ms && gimbal.trace.route_ms == now_ms);
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(gimbal.trace.rc_sequence == old_rc_seq + 1 && gimbal.trace.route_sequence == old_route_seq + 2);
+    puts("nyush remote chain: PASS (original registry/decoder/daemon, source provenance, TC/IDLE, snapshot, BUSY retry without abort, command mapping, loss, error and reconnection)");
 }

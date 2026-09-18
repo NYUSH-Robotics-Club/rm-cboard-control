@@ -186,7 +186,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         // 位置环参数保留；speed_loop_only=true时不执行，恢复后输出仍受模式限速。
         .pid_outer = {1.0f, 0.0f, 0.0f, 12000.0f, 0.0f},
         // 速度误差为RPM、输出为电流原始刻度；保留当前用户PID，反馈失联仍归零。
-        .pid_inner = {120.0f, 0.0f, 0.0f, 6000.0f, 0.0f}
+        .pid_inner = {300.0f, 60.0f, 0.0f, 6000.0f, 2000.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。

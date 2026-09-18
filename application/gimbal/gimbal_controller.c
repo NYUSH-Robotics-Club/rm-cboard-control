@@ -14,12 +14,14 @@
 #include "logger.h"
 #include "bsp_time.h"
 #include <math.h>
+#include <stddef.h>
 #include <string.h>
 #include <stdatomic.h>
 
 volatile GimbalMonitorSnapshot g_gimbal_monitor;
 _Static_assert(sizeof(GimbalMonitorAxis) == 56U, "monitor axis ABI");
-_Static_assert(sizeof(GimbalMonitorSnapshot) == 148U, "monitor snapshot ABI");
+_Static_assert(sizeof(GimbalMonitorSnapshot) == 216U, "monitor v2 snapshot ABI");
+_Static_assert(offsetof(GimbalMonitorSnapshot, command_trace) == 148U, "preserve v1 prefix");
 
 /* 暂存本次服务请求；每次有效命令回调先清空，停机分支也会记录零命令及状态。 */
 static int16_t s_monitor_commands[2];
@@ -657,7 +659,7 @@ static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
   bool active = s_last_cmd.enabled && s_startup_position_captured && s_yaw_reference.valid;
   GimbalMonitorSnapshot next = {0};
   next.magic = 0x474D4F4EU;
-  next.version = 1U;
+  next.version = GIMBAL_MONITOR_VERSION;
   next.size_bytes = sizeof(next);
   next.callback_count = g_gimbal_monitor.callback_count + 1U;
   next.tick_ms = now;
@@ -666,6 +668,23 @@ static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
   next.startup_ready = s_startup_position_captured;
   next.yaw = monitor_axis(s_yaw_motor_id, 0U, active);
   next.pitch = monitor_axis(s_pitch_motor_id, 1U, active);
+  next.command_trace = s_last_cmd.trace;
+  next.yaw_route_rate = s_last_cmd.yaw_rate;
+  bool yaw_active = (next.yaw.flags & GIMBAL_MONITOR_CONTROL_ACTIVE) != 0U;
+  next.yaw_mode = yaw_active ? (uint32_t)s_yaw_mode : UINT32_MAX;
+  MotorContext_t *yaw = MotorDriver_GetContext(s_yaw_motor_id);
+  if (yaw && yaw->initialized) {
+    const PID_Controller *pid = &yaw->pid_inner;
+    next.yaw_pid_pout = yaw_active ? pid->pout : NAN;
+    next.yaw_pid_iout = yaw_active ? pid->iout : NAN;
+    next.yaw_pid_dout = yaw_active ? pid->dout : NAN;
+    next.yaw_pid_output = yaw_active ? pid->output : NAN;
+    next.yaw_pid_kp = pid->Kp;
+    next.yaw_pid_ki = pid->Ki;
+    next.yaw_pid_kd = pid->Kd;
+    next.yaw_pid_output_max = pid->output_max;
+    next.yaw_pid_integral_max = pid->integral_max;
+  }
   /* Cortex-M4无数据缓存；编译屏障和volatile发布顺序供运行中SWD重读校验。 */
   uint32_t odd = g_gimbal_monitor.sequence + 1U;
   next.sequence = odd;

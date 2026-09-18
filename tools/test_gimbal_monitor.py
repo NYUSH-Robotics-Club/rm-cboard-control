@@ -21,6 +21,33 @@ def packet(sequence=2, tick=100, flags=31, unit=1, status=0, current=-1234):
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_v2_preserves_axes_and_requires_complete_known_layout(self):
+        data = bytearray(packet()) + bytes(216 - monitor.SIZE)
+        struct.pack_into('<2I', data, 8, 2, 216)
+        # Inactive v2 PID extension may contain NaN, without corrupting legacy axes.
+        struct.pack_into('<f', data, 180, float('nan'))
+        sample = monitor.decode_snapshot(data, 2, 105)
+        self.assertEqual(sample['yaw']['command_raw'], -1234)
+        self.assertEqual(sample['pitch']['encoder_raw'], 1900)
+        class FakeReader:
+            sequence_after = 2
+            def words(self, address, count):
+                if count == 54:
+                    assert address == 0x20001000
+                    return list(struct.unpack('<54I', data))
+                assert count == 1
+                return [self.sequence_after if address == 0x20001000 else 105]
+        reader = FakeReader()
+        symbols = {'g_gimbal_monitor': (0x20001000, 216), 'uwTick': (0x20000000, 4)}
+        self.assertEqual(monitor.read_snapshot(reader, symbols), sample)
+        reader.sequence_after = 4
+        self.assertIsNone(monitor.read_snapshot(reader, symbols))
+        with self.assertRaises(monitor.fw.Failure):
+            monitor.decode_snapshot(data[:148], 2, 105)
+        struct.pack_into('<I', data, 8, 3)
+        with self.assertRaises(monitor.fw.Failure):
+            monitor.decode_snapshot(data, 2, 105)
+
     def test_signed_feedback_and_continuous_position(self):
         sample = monitor.decode_snapshot(packet(), 2, 105)
         self.assertEqual(sample['yaw']['current_actual_raw'], -1200)

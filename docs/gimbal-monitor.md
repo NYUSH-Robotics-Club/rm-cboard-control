@@ -63,7 +63,10 @@ yaw启用`speed_loop_only`时，位置目标只是备忘值，界面标出“未
 
 ## 数据一致性与范围
 
-`application/gimbal/gimbal_monitor.h`定义v1布局，`g_gimbal_monitor`可直接在调试器中展开查看。
+`application/gimbal/gimbal_monitor.h`当前定义v2布局（216字节），保留v1的148字节前缀，
+尾部增加同命令的yaw来源与PID诊断。SWD工具兼容v1/v2，按匹配ELF大小读取完整快照，
+继续展示/保存公共双轴字段；新增专项字段由`just logger`的RTT v9日志记录。
+`g_gimbal_monitor`可直接在调试器中展开查看。
 云台消息派发上下文独占发布；序号变成奇数后写入，完成后变回偶数。电脑读取整块及末尾序号，
 只有前后相同的偶数才接受；结构版本/长度错误立即退出。双轴反馈本来就来自各自的CAN时刻，
 快照一致不表示两台电机在同一微秒采样，`feedback_ms`保留各自的反馈时间。

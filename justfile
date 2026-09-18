@@ -32,9 +32,5 @@ logger *args:
 logger-cli *args:
     logger-cli {{args}}
 
-lg *args:
-    just logger {{args}}
-
-lc *args:
-    just logger-cli {{args}}
-
+alias lg := logger
+alias lc := logger-cli

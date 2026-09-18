@@ -81,13 +81,22 @@ def parse_args() -> argparse.Namespace:
 class ViewerHandler(http.server.BaseHTTPRequestHandler):
     viewer_html: bytes = b""
 
+    def load_viewer(self) -> bytes:
+        return self.viewer_html
+
     def do_GET(self) -> None:  # noqa: N802
-        if self.path in ("/", "/index.html"):
+        if self.path.split("?", 1)[0] in ("/", "/index.html"):
+            try:
+                body = self.load_viewer()
+            except (OSError, UnicodeError):
+                self.send_error(503, "Viewer file unavailable; retry after saving it.")
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(self.viewer_html)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(self.viewer_html)
+            self.wfile.write(body)
             return
 
         self.send_response(404)
@@ -120,10 +129,8 @@ class RTTWebSocketBridge:
         self.sent_packets = 0
         self.http_server: http.server.ThreadingHTTPServer | None = None
         self.http_thread: threading.Thread | None = None
-        # Both shared-port and split-port serving advertise the actual socket port.
-        viewer = Path(args.viewer_file).read_text(encoding="utf-8")
-        config = json.dumps({"wsPort": self.ws_port})
-        self.viewer_html = viewer.replace("</head>", f"<script>window.RTT_CONFIG={config};</script></head>").encode("utf-8")
+        # Fail before opening a probe if the page cannot be loaded.
+        _ = self.viewer_html
         self.monitor_parser = FrameParser()
         self.monitor_writer: MonitorWriter | None = None
         self.monitor_error: str | None = None
@@ -135,6 +142,13 @@ class RTTWebSocketBridge:
                 )
             except Exception as exc:  # pylint: disable=broad-except
                 self.monitor_error = str(exc)
+
+    @property
+    def viewer_html(self) -> bytes:
+        """Load each HTTP request from disk so refresh picks up saved UI changes."""
+        viewer = Path(self.args.viewer_file).read_text(encoding="utf-8")
+        config = json.dumps({"wsPort": self.ws_port})
+        return viewer.replace("</head>", f"<script>window.RTT_CONFIG={config};</script></head>").encode("utf-8")
 
     @property
     def ws_host(self) -> str:
@@ -299,10 +313,20 @@ class RTTWebSocketBridge:
     def _serve_http_request(self, request: Request) -> Response:
         path = request.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
+            try:
+                body = self.viewer_html
+            except (OSError, UnicodeError):
+                return self._make_http_response(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    b"Viewer file unavailable; retry after saving it.\n",
+                    "text/plain; charset=utf-8",
+                    {"Cache-Control": "no-store"},
+                )
             return self._make_http_response(
                 HTTPStatus.OK,
-                self.viewer_html,
+                body,
                 "text/html; charset=utf-8",
+                {"Cache-Control": "no-store"},
             )
         if path == "/favicon.ico":
             return self._make_http_response(HTTPStatus.NO_CONTENT, b"")
@@ -342,10 +366,15 @@ class RTTWebSocketBridge:
         return self._make_ws_guidance_response(websocket_error)
 
     def _start_http_server(self) -> None:
-        ViewerHandler.viewer_html = self.viewer_html
+        bridge = self
+
+        class BridgeViewerHandler(ViewerHandler):
+            def load_viewer(self) -> bytes:
+                return bridge.viewer_html
+
         self.http_server = http.server.ThreadingHTTPServer(
             (self.args.http_host, self.args.http_port),
-            ViewerHandler,
+            BridgeViewerHandler,
         )
         self.http_thread = threading.Thread(
             target=self.http_server.serve_forever,

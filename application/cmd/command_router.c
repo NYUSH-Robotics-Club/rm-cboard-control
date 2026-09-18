@@ -129,9 +129,9 @@ static void route_gimbal(CommandRouter *router,
     int16_t pitch_raw = apply_deadband(remote->rc.ch[1]);
 
     /* Reject an impossible single-frame yaw jump and retain the last input. */
-    if (fabsf(router->previous_yaw_input - (float)yaw_raw) > 1000.0f) {
-        yaw_raw = (int16_t)router->previous_yaw_input;
-    }
+    //if (fabsf(router->previous_yaw_input - (float)yaw_raw) > 1000.0f) {
+        //yaw_raw = (int16_t)router->previous_yaw_input;
+    //}
 
     const float max_input = (float)(RC_CH_VALUE_MAX - RC_CH_VALUE_OFFSET);
     float manual_yaw_rate = (float)yaw_raw / max_input;

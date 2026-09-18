@@ -440,7 +440,7 @@ int main(void){
  motors[5].config=&yaw_config;
  GimbalApp_Init(); ShooterApp_Init();
  gimbal_step(100,true,true);assert(outputs[5]==0&&outputs[8]==0);
- assert(g_gimbal_monitor.magic == 0x474D4F4E && g_gimbal_monitor.version == 1);
+ assert(g_gimbal_monitor.magic == 0x474D4F4E && g_gimbal_monitor.version == GIMBAL_MONITOR_VERSION);
  assert(g_gimbal_monitor.size_bytes == sizeof(GimbalMonitorSnapshot));
  assert(g_gimbal_monitor.callback_count == 1 && !(g_gimbal_monitor.sequence & 1));
  assert(!(g_gimbal_monitor.yaw.flags & GIMBAL_MONITOR_CONTROL_ACTIVE));
@@ -541,18 +541,36 @@ int main(void){
  yaw_control.speed_loop_only=true;
  PID_Init(&yaw->pid_inner,100,0,0,25000,0);
  gimbal_step(1430,true,true);gimbal_step(1530,true,true);
- GimbalCmd speed_cmd={.enabled=true,.yaw_rate=1.0f};
+ GimbalCmd speed_cmd={.enabled=true,.yaw_rate=1.0f,
+   .trace={.flags=15,.rc_ch0=-660,.rc_sequence=41,.rc_dispatch_ms=1528,
+           .route_sequence=79,.route_ms=1533}};
  now_ms=1534;motors[5].last_feedback_time=motors[8].last_feedback_time=now_ms;
  MsgCenter_Publish(TOPIC_GIMBAL_CMD,&speed_cmd,sizeof(speed_cmd));MsgCenter_Dispatch();
  assert(fabsf(yaw->pid_inner.target-5.0f)<0.001f&&outputs[5]>0);
  assert(g_gimbal_monitor.yaw.flags & GIMBAL_MONITOR_CONTROL_ACTIVE);
  assert(!(g_gimbal_monitor.yaw.flags & GIMBAL_MONITOR_POSITION_ACTIVE));
  assert(g_gimbal_monitor.yaw.speed_target_rpm == 5.0f);
+ assert(g_gimbal_monitor.command_trace.rc_ch0 == -660);
+ assert(g_gimbal_monitor.command_trace.rc_sequence == 41);
+ assert(g_gimbal_monitor.command_trace.route_sequence == 79);
+ assert(g_gimbal_monitor.yaw_route_rate == 1 && g_gimbal_monitor.yaw_mode == YAW_CONTROL_MANUAL);
+ assert(g_gimbal_monitor.yaw_pid_pout == yaw->pid_inner.pout);
+ assert(g_gimbal_monitor.yaw_pid_output == yaw->pid_inner.output);
+ assert(g_gimbal_monitor.yaw_pid_kp == 100);
+ assert(g_gimbal_monitor.yaw.command_raw == outputs[5]);
+ assert(fabsf(g_gimbal_monitor.yaw.speed_loop_dt_s - 0.004f) < 0.000001f);
+ assert(g_gimbal_monitor.callback_dt_ms == 4);
+ /* 位置PID旁路后仍保留本次回调的角度参考，供遥测单独显示。 */
+ assert(isfinite(g_gimbal_monitor.yaw.position_target_ticks));
+ assert(g_gimbal_monitor.yaw.position_target_ticks == yaw->angle_target);
  assert(yaw->pid_outer.output==0.0f&&yaw->pid_outer.update_divider==0U);
  float held=yaw->angle_target;
  yaw->angle_raw+=100;yaw->speed_rpm=10;
  gimbal_step(1538,true,true);
  assert(yaw->pid_inner.target==0.0f&&outputs[5]<0&&yaw->angle_target==held);
+ assert(g_gimbal_monitor.yaw.speed_target_rpm == 0.0f);
+ assert(g_gimbal_monitor.command_trace.flags == 0); /* 非Cmd来源不继承上一命令的来源。 */
+ assert(g_gimbal_monitor.yaw.position_target_ticks == held);
  speed_cmd.vision_valid=true;speed_cmd.vision_yaw_err_rad=1.0f;
  now_ms=1542;motors[5].last_feedback_time=motors[8].last_feedback_time=now_ms;
  MsgCenter_Publish(TOPIC_GIMBAL_CMD,&speed_cmd,sizeof(speed_cmd));MsgCenter_Dispatch();

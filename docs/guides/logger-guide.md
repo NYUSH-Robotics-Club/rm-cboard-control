@@ -48,7 +48,7 @@ just logger
 
 `just flash` 会先构建并校验，烧录成功后按本机配置复位运行；不要同时运行其他占用探针的工具。
 
-## 曲线和状态的含义（遥测 v8）
+## 曲线和状态的含义（遥测 v8/v9）
 
 更新固件后关闭旧 logger，执行 `just flash`、`just logger`，再刷新网页。
 仅重启网页无法补齐旧固件未发送的数据；网页会提示旧版数据缺少有效性标记。
@@ -56,8 +56,20 @@ just logger
 
 - `IMU & Gimbal` 显示 yaw/pitch 角度（度）和速度（度/秒）；yaw 使用连续角度，
   pitch 使用单圈编码角度。速度目标来自当前内环；spin 下 yaw 实际速度也是内环使用的 IMU 反馈。
-- `speed_loop_only=true` 时 yaw 位置目标没有参与控制，因此位置目标曲线留空，
-  观察速度目标/实际曲线。停用控制或反馈过期时相应曲线留空，不画假零值。
+- `speed_loop_only=true` 时，yaw 图单独显示 `reference angle（未闭环参考）`：
+  它是回调保留的连续角度参考，对应日志 `gimbal_cmd_yaw_deg`，并未驱动位置环。
+  `target angle（闭环目标）` / `gimbal_yaw_target_deg` 仍留空；启用位置环后才显示。
+  速度目标仍来自实际内环。停用控制或反馈过期时相应曲线留空，不画假零值。
+- yaw 目标/参考使用上层虚线、实际值使用实线，重合时仍可区分；图例显示最新采样值，
+  无效值显示 N/A，零目标显示 0.00。面板提示当前闭环状态。
+  角度参考需要烧录本次固件；仅更新网页可以改善已有速度目标的重合显示。
+- UI `2026-09-17.2` 在 `IMU & Gimbal` 顶部集中显示 yaw 最新目标/实际速度、
+  `gimbal_enabled`、`gimbal_startup_ready`、`yaw_flags`、页面收帧时间及 MCU 采样帧。
+  有效零速显示 `0.00 °/s`；当前不可用显示 `—` 并说明禁用、等待对齐、快照过期或断流原因，
+  不会用历史目标补成当前值。状态区与速度图例使用同一帧；历史曲线仍保留断线。
+- 仅上述网页/HTTP 显示改动无需烧录（下方v9诊断需要新固件）。先退出旧 `just logger`，重新启动并刷新网页；
+  确认标题下的 UI 版本。此后每次刷新都会读取已保存的网页文件，HTTP 禁止缓存，
+  单端口与分端口模式一致；网页文件读取失败返回 503，保存完成后重试即可。
 - `Motors` 按实际软件电机编号标注，与固件速度数组同序，速度为转子 RPM；
   `Chassis Cmd` 是归一化命令，不是米/秒。目标是控制器请求，不等于已发送电流。
 - `CAN1 RX` / `CAN2 RX` 的 ON 表示该总线配置的电机在最近 100 ms 有反馈，
@@ -71,6 +83,53 @@ just logger
   样本间隔超过 250 ms 不连线，避免把传输空窗画成连续运动。
 
 ## 当前能力
+
+### Yaw 同步诊断记录（v9）
+
+新固件保留v8的300字节前缀，追加112字节，载荷412字节、整帧422字节。
+Python与网页兼容v3～v9。先关闭旧logger，更新固件，再启动`just logger`并刷新网页；
+新增列自动保存到`monitor/logger_*.txt`，终端`just logger-cli`使用同一保存器。
+旧固件仍可显示，但没有的诊断列为`nan`，不能靠重启主机补出旧日志的缺失数据。
+
+| 字段 | 含义 |
+|---|---|
+| `yaw_rc_ch0` | 此命令路由实际使用的原始解码杆量，死区/取反/过滤前，合法±660 |
+| `yaw_route_rate` | 此命令发布的归一化yaw_rate，云台模式覆盖前；一般为±1 |
+| `gimbal_yaw_target_deg_s` / `gimbal_yaw_actual_deg_s` | 同回调PID实际采用的目标/反馈，度/秒；速度环未激活时目标为nan |
+| `yaw_speed_raw_rpm` / `gimbal_yaw_encoder_raw` | 同回调读取的电机原始转速RPM与单圈编码，区别于spin使用的IMU反馈 |
+| `yaw_pid_pout/iout/dout/output` | 实际P/I/D项及低通、PID限幅后的输出，原始命令刻度 |
+| `yaw_pid_kp/ki/kd/output_max/integral_max` | 正在运行的速度PID参数，不能用当前磁盘配置替代；增益按RPM及秒计算 |
+| `yaw_command_raw` / `yaw_command_status` / `yaw_command_unit` | 应用叠加补偿并最终限幅后的服务请求；状态0表示接受、负数为失败；单位1为电流刻度、2为电压刻度、0未知 |
+| `yaw_current_actual_raw` | 同回调读取的电调电流反馈原始刻度，不是安培；反馈过期为nan |
+| `yaw_sample_ms` / `yaw_callback_count` / `yaw_callback_dt_ms` | 快照完成时刻、云台回调计数与间隔ms，首回调间隔0；计数自然回绕 |
+| `yaw_pid_dt_s` | PID实际用于积分/微分的秒间隔；PID有异常dt回退，因此与回调间隔分开记录 |
+| `yaw_rc_sequence` / `yaw_rc_dispatch_ms` | Cmd收到RC消息的计数及派发时刻，不是UART逐帧计数/硬件接收时刻 |
+| `yaw_route_sequence` / `yaw_route_ms` | Cmd生成命令的计数和本轮传入时刻ms；来源随命令按值复制 |
+| `yaw_feedback_ms` | 本次速度控制所见电机反馈的时间戳ms |
+| `yaw_rc_age_ms` / `yaw_command_age_ms` / `yaw_feedback_age_ms` | 以yaw_sample_ms减上述来源时刻所得的uint32回绕年龄，无来源为nan |
+| `yaw_mode` | 实际模式0手动、1视觉、2spin；内环未运行为nan。速度调试可能覆盖请求模式 |
+| `yaw_diag_valid` / `yaw_trace_flags` | 快照有效位、命令来源位，见下文 |
+| `telemetry_drop_count` | 固件RTT写入失败计数；不是CAN或遥控丢帧数 |
+
+`yaw_diag_valid=0`时整组诊断无效；没有yaw电机、未运行PID、未收到RC分别按各字段有效性
+输出nan。禁用期间实际提交的零命令及服务状态仍记录，PID项不能冒充有效控制输出。
+`yaw_trace_flags`按位为：1=Cmd来源、2=见过RC消息、4=RC在线、8=CAN输出已解锁、
+16=命令请求视觉、32=命令请求spin。掉线时仍保存最后输入并清在线位，便于分析超时。
+启动对齐等非Cmd命令无来源，不伪造原始ch0/RC或路由序号。
+
+另外补存`rc_rocker_r_x/r_y/l_x/l_y`、`rc_dial`和`rc_switches`：它们是Dashboard收到的
+最新遥控状态（结合status_flags的0x02有效位），**不保证是本次速度PID采用的输入**。
+判断路由滞留应使用`yaw_rc_ch0`及其来源序号，不能拿较新的`rc_rocker_r_x`与旧回调比较。
+
+诊断在云台命令回调结束时统一复制；反馈本身来自之前的CAN帧，时间戳保留其年龄。
+仍沿用至少20ms一次的非阻塞RTT发布，常见22ms；不是每次控制回调都录制。
+比较callback_count识别未采回调，比较seq和telemetry_drop_count识别遥测缺口。
+`yaw_command_raw`是最终应用请求，服务接受并不证明CAN已发送或电调已执行。
+日志记录运行PID参数，但不包含完整固件哈希；烧录版本仍应单独保存。
+
+本问题的持续结论和后续判据见[专项memo](../project/YAW_DIAGNOSTIC_MEMO.md)。
+
+### 通用日志
 
 - 12 个标签：`SYS`、`CMD`、`CHA`、`GIM`、`SHO`、`SEN`、`MOT`、
   `IMU`、`CAN`、`VIS`、`RC`、`DEBUG`。

@@ -1,4 +1,4 @@
-/* 将应用诊断打包为RTT遥测。版本8保留版本7前缀，并附带数据能力、轴状态和电机编号。
+/* 将应用诊断打包为RTT遥测。版本9保留版本8前缀，并附带同回调的yaw输入/闭环诊断。
  * 浮点NaN表示未接入、过期或未启用的测量/目标，不能画成零值。只观察，不改变控制。
  */
 #ifndef RM_DASHBOARD_H
@@ -9,7 +9,7 @@
 #define DASHBOARD_RTT_CHANNEL 1U
 #define DASHBOARD_RTT_BUFFER_SIZE 2048U
 #define DASHBOARD_FRAME_MAGIC 0x4452U
-#define DASHBOARD_FRAME_VERSION 8U
+#define DASHBOARD_FRAME_VERSION 9U
 
 enum {
   DASHBOARD_CAN = 1U,      /* CAN位表示该总线有配置电机在100ms内反馈，不代表总线无错误。 */
@@ -29,6 +29,8 @@ typedef struct {
   float motor_target_rpm[4], motor_rpm[4], imu_angle_deg[3], imu_gyro_deg_s[3];
   float gimbal_yaw_target_deg, gimbal_yaw_actual_deg, gimbal_yaw_target_deg_s, gimbal_yaw_actual_deg_s;
   float gimbal_pitch_target_deg, gimbal_pitch_actual_deg, gimbal_pitch_target_deg_s, gimbal_pitch_actual_deg_s;
+  /* v8 yaw为当前有效回调的连续角度参考（度），仅速度环时也有值；
+   * 是否用于位置闭环由yaw_flags的POSITION_ACTIVE标明。其余两字段未接入。 */
   float gimbal_cmd_yaw_deg, gimbal_cmd_pitch_deg, gimbal_cmd_chassis_rotate_wz;
   uint16_t gimbal_yaw_encoder_raw, gimbal_pitch_encoder_raw;
   uint8_t referee_game_state; uint16_t referee_stage_remain_time; uint8_t referee_robot_id, referee_robot_level;
@@ -47,6 +49,21 @@ typedef struct {
   uint8_t yaw_flags, pitch_flags; /* GimbalMonitorAxis.flags；位置旁路时不发布位置目标。 */
   uint8_t chassis_motor_ids[4]; /* 与四组速度数组同序；0表示该槽没有配置电机。 */
   uint8_t gimbal_enabled, gimbal_startup_ready;
+  /* v9：同一云台回调的快照；diag_valid=0时整个尾部无效。
+   * trace_flags使用GIMBAL_TRACE_*；无来源时不能把ch0=0当作真实回中。
+   * ms来自MCU，序号自然回绕；callback_count不是遥测seq或UART帧数。
+   */
+  uint32_t yaw_diag_valid, yaw_sample_ms, yaw_callback_count, yaw_callback_dt_ms;
+  uint32_t yaw_trace_flags, yaw_rc_sequence, yaw_rc_dispatch_ms, yaw_route_sequence, yaw_route_ms;
+  int32_t yaw_rc_ch0;
+  float yaw_route_rate;
+  uint32_t yaw_mode, yaw_feedback_ms;
+  float yaw_speed_raw_rpm, yaw_pid_dt_s;
+  /* command_raw是应用限幅后的服务请求，不是CAN发送确认；电流均为原始刻度，非安培。 */
+  uint32_t yaw_command_unit;
+  int32_t yaw_command_status, yaw_command_raw, yaw_current_actual_raw;
+  float yaw_pid_pout, yaw_pid_iout, yaw_pid_dout, yaw_pid_output;
+  float yaw_pid_kp, yaw_pid_ki, yaw_pid_kd, yaw_pid_output_max, yaw_pid_integral_max;
 } DashboardPayload;
 typedef struct { uint16_t magic; uint8_t version, payload_len; uint32_t seq; DashboardPayload payload; uint16_t crc16; } DashboardFrame;
 #pragma pack(pop)

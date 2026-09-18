@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+"""Save decoded telemetry as tab-separated records with units in column names.
+Diagnostic source ages use MCU time; unavailable values stay NaN in the output file.
+"""
 from __future__ import annotations
 
 import math
@@ -6,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from scripts.rtt_common.telemetry import TelemetryFrame
+from scripts.rtt_common.telemetry import TelemetryFrame, YAW_DIAGNOSTIC_FIELDS
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_MONITOR_DIR = ROOT_DIR / "monitor"
@@ -91,7 +94,9 @@ MONITOR_COLUMNS = (
     "chassis_motor_id_1",
     "chassis_motor_id_2",
     "chassis_motor_id_3",
-)
+    "rc_rocker_r_x", "rc_rocker_r_y", "rc_rocker_l_x", "rc_rocker_l_y", "rc_dial", "rc_switches",
+    "gimbal_yaw_encoder_raw", "telemetry_drop_count",
+) + YAW_DIAGNOSTIC_FIELDS + ("yaw_rc_age_ms", "yaw_command_age_ms", "yaw_feedback_age_ms")
 
 
 def resolve_monitor_dir(path: str | Path) -> Path:
@@ -117,6 +122,13 @@ def _format_value(value) -> str:
         text = f"{value:.9f}".rstrip("0").rstrip(".")
         return "0" if text in ("-0", "") else text
     return str(value)
+
+
+def _age_ms(sample_ms, source_ms):
+    """MCU uint32 millisecond age; missing legacy/source timestamps stay NaN."""
+    if not (math.isfinite(sample_ms) and math.isfinite(source_ms)):
+        return float("nan")
+    return (int(sample_ms) - int(source_ms)) & 0xFFFFFFFF
 
 
 def _frame_row_values(frame: TelemetryFrame) -> tuple[object, ...]:
@@ -200,6 +212,13 @@ def _frame_row_values(frame: TelemetryFrame) -> tuple[object, ...]:
         frame.chassis_motor_ids[1],
         frame.chassis_motor_ids[2],
         frame.chassis_motor_ids[3],
+        frame.rc_rocker_r_x, frame.rc_rocker_r_y, frame.rc_rocker_l_x, frame.rc_rocker_l_y,
+        frame.rc_dial, frame.rc_switches,
+        frame.gimbal_yaw_encoder_raw, frame.telemetry_drop_count,
+    ) + tuple(getattr(frame, name) for name in YAW_DIAGNOSTIC_FIELDS) + (
+        _age_ms(frame.yaw_sample_ms, frame.yaw_rc_dispatch_ms),
+        _age_ms(frame.yaw_sample_ms, frame.yaw_route_ms),
+        _age_ms(frame.yaw_sample_ms, frame.yaw_feedback_ms),
     )
 
 

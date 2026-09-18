@@ -1,10 +1,13 @@
 /*
- * 定义云台回调结束时发布的只读监控快照；电脑通过SWD读取，不在回调中打印。
+ * 定义云台回调结束时发布的只读监控快照；供SWD和RTT读取，不在回调中打印。
  * 这是控制回调采样，不是逐帧CAN记录；命令被服务接受也不等于已在线路发送。
  */
 #ifndef GIMBAL_MONITOR_H
 #define GIMBAL_MONITOR_H
 #include <stdint.h>
+#include "control_messages.h"
+
+#define GIMBAL_MONITOR_VERSION 2U
 
 enum {
     GIMBAL_MONITOR_PRESENT = 1U,
@@ -15,7 +18,7 @@ enum {
     GIMBAL_MONITOR_SPEED_IMU = 32U
 };
 
-/* 所有字段占4字节，供主机按固定v1布局解码；缺轴flags为0，目标无效时不得使用。 */
+/* 所有字段占4字节，保留v1轴布局；缺轴flags为0，目标无效时不得使用。 */
 typedef struct {
     uint32_t motor_id;
     uint32_t flags;
@@ -45,6 +48,13 @@ typedef struct {
     uint32_t startup_ready;
     GimbalMonitorAxis yaw;
     GimbalMonitorAxis pitch;
+    /* v2尾部：同一次命令/回调的输入与PID状态。仅CONTROL_ACTIVE时PID项有效。 */
+    GimbalCommandTrace command_trace;
+    float yaw_route_rate; /* Cmd实际发布的归一化杆量；模式覆盖之前。 */
+    uint32_t yaw_mode; /* 实际YawControlMode；没有运行速度环时UINT32_MAX。 */
+    float yaw_pid_pout, yaw_pid_iout, yaw_pid_dout, yaw_pid_output; /* 原始命令刻度。 */
+    float yaw_pid_kp, yaw_pid_ki, yaw_pid_kd;
+    float yaw_pid_output_max, yaw_pid_integral_max;
 } GimbalMonitorSnapshot;
 
 /* 由云台消息派发上下文独占写入；调试器只读。禁止ISR或另一个任务修改。 */

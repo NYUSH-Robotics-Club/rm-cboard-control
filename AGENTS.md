@@ -7,6 +7,10 @@ compatibility requirements, and unfinished work.
 For every task:
 
 1. Read `docs/project/PROJECT_MEMO.md` before inspecting or editing implementation files.
+   During the current yaw investigation session, also read
+   `docs/project/YAW_DIAGNOSTIC_MEMO.md` before every task, including log analysis.
+   Update that memo before finishing work on this issue; keep observations tied to
+   their recording and distinguish source changes from flashed firmware.
 2. Preserve the dependency direction documented there.
 3. Do not invent CAN identifiers, feedback layouts, baud rates, or protocols for
    hardware marked as unknown. Add an explicit unsupported adapter instead.

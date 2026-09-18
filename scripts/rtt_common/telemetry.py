@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
+"""Decode versioned RTT frames, validate CRC, and preserve unavailable data as NaN.
+Yaw diagnostics describe one callback; timestamps and source counters identify its input.
+"""
 import dataclasses
 import struct
 from typing import Dict, List
 
 MAGIC = 0x4452
 MAGIC_ALT = 0x5244
-CURRENT_VERSION = 8
-SUPPORTED_VERSIONS = (3, 4, 5, 6, 7, 8)
+CURRENT_VERSION = 9
+SUPPORTED_VERSIONS = (3, 4, 5, 6, 7, 8, 9)
 
 HEADER_STRUCT = struct.Struct("<HBBI")
 PAYLOAD_STRUCT_V3 = struct.Struct("<Iff4f4f3f3f11f10B8h2BH8BII7fBHBB15fH")
@@ -17,6 +20,39 @@ PAYLOAD_STRUCT_V7 = struct.Struct("<IffHfffB4f4f3f3f11fHHBHBBHHHHH6B8hBHBBB5HfII
 # v8 appends source availability, axis flags and motor IDs to the v7 prefix.
 PAYLOAD_STRUCT_V8 = struct.Struct(PAYLOAD_STRUCT_V7.format + "IBB4BBB")
 V8_METADATA = struct.Struct("<IBB4BBB")
+# v9 appends one callback snapshot; the v8 prefix stays byte-for-byte compatible.
+V9_DIAGNOSTICS = struct.Struct("<9Iif2I2fI3i9f")
+PAYLOAD_STRUCT_V9 = struct.Struct(PAYLOAD_STRUCT_V8.format + V9_DIAGNOSTICS.format[1:])
+YAW_DIAGNOSTIC_FIELDS = (
+    "yaw_diag_valid",
+    "yaw_sample_ms",
+    "yaw_callback_count",
+    "yaw_callback_dt_ms",
+    "yaw_trace_flags",
+    "yaw_rc_sequence",
+    "yaw_rc_dispatch_ms",
+    "yaw_route_sequence",
+    "yaw_route_ms",
+    "yaw_rc_ch0",
+    "yaw_route_rate",
+    "yaw_mode",
+    "yaw_feedback_ms",
+    "yaw_speed_raw_rpm",
+    "yaw_pid_dt_s",
+    "yaw_command_unit",
+    "yaw_command_status",
+    "yaw_command_raw",
+    "yaw_current_actual_raw",
+    "yaw_pid_pout",
+    "yaw_pid_iout",
+    "yaw_pid_dout",
+    "yaw_pid_output",
+    "yaw_pid_kp",
+    "yaw_pid_ki",
+    "yaw_pid_kd",
+    "yaw_pid_output_max",
+    "yaw_pid_integral_max",
+)
 CRC_STRUCT = struct.Struct("<H")
 PAYLOAD_STRUCTS: Dict[int, struct.Struct] = {
     3: PAYLOAD_STRUCT_V3,
@@ -25,6 +61,7 @@ PAYLOAD_STRUCTS: Dict[int, struct.Struct] = {
     6: PAYLOAD_STRUCT_V6,
     7: PAYLOAD_STRUCT_V7,
     8: PAYLOAD_STRUCT_V8,
+    9: PAYLOAD_STRUCT_V9,
 }
 PAYLOAD_SIZES = {version: payload_struct.size for version, payload_struct in PAYLOAD_STRUCTS.items()}
 PAYLOAD_SIZE = PAYLOAD_SIZES[CURRENT_VERSION]
@@ -168,6 +205,61 @@ class TelemetryFrame:
     chassis_motor_ids: List[int] = dataclasses.field(default_factory=lambda: [0] * 4)
     gimbal_enabled: int = 0
     gimbal_startup_ready: int = 0
+    # Absent legacy diagnostics remain NaN, never plausible zero measurements.
+    yaw_diag_valid: int | float = 0
+    yaw_sample_ms: int | float = float("nan")
+    yaw_callback_count: int | float = float("nan")
+    yaw_callback_dt_ms: int | float = float("nan")
+    yaw_trace_flags: int | float = 0
+    yaw_rc_sequence: int | float = float("nan")
+    yaw_rc_dispatch_ms: int | float = float("nan")
+    yaw_route_sequence: int | float = float("nan")
+    yaw_route_ms: int | float = float("nan")
+    yaw_rc_ch0: int | float = float("nan")
+    yaw_route_rate: int | float = float("nan")
+    yaw_mode: int | float = float("nan")
+    yaw_feedback_ms: int | float = float("nan")
+    yaw_speed_raw_rpm: int | float = float("nan")
+    yaw_pid_dt_s: int | float = float("nan")
+    yaw_command_unit: int | float = float("nan")
+    yaw_command_status: int | float = float("nan")
+    yaw_command_raw: int | float = float("nan")
+    yaw_current_actual_raw: int | float = float("nan")
+    yaw_pid_pout: int | float = float("nan")
+    yaw_pid_iout: int | float = float("nan")
+    yaw_pid_dout: int | float = float("nan")
+    yaw_pid_output: int | float = float("nan")
+    yaw_pid_kp: int | float = float("nan")
+    yaw_pid_ki: int | float = float("nan")
+    yaw_pid_kd: int | float = float("nan")
+    yaw_pid_output_max: int | float = float("nan")
+    yaw_pid_integral_max: int | float = float("nan")
+
+
+
+def _validate_yaw_diagnostics(frame: TelemetryFrame) -> None:
+    """Apply snapshot/source validity before exposing measurements to any consumer."""
+    def invalidate(names):
+        for name in names:
+            setattr(frame, name, float("nan"))
+
+    if not frame.yaw_diag_valid:
+        invalidate(name for name in YAW_DIAGNOSTIC_FIELDS if name not in ("yaw_diag_valid", "yaw_trace_flags"))
+        frame.yaw_trace_flags = 0
+        return
+    if not (frame.yaw_trace_flags & 1):
+        invalidate(("yaw_route_sequence", "yaw_route_ms"))
+    if (frame.yaw_trace_flags & 3) != 3:
+        invalidate(("yaw_rc_ch0", "yaw_rc_sequence", "yaw_rc_dispatch_ms"))
+    if not (frame.yaw_flags & 4):
+        invalidate(("yaw_speed_raw_rpm", "yaw_current_actual_raw"))
+    if not (frame.yaw_flags & 2):
+        invalidate(("yaw_feedback_ms",))
+    if not (frame.yaw_flags & 1):
+        invalidate(("yaw_command_unit", "yaw_command_status", "yaw_command_raw",
+                    "yaw_pid_kp", "yaw_pid_ki", "yaw_pid_kd", "yaw_pid_output_max", "yaw_pid_integral_max"))
+    if not (frame.yaw_flags & 8):
+        invalidate(("yaw_mode", "yaw_pid_dt_s", "yaw_pid_pout", "yaw_pid_iout", "yaw_pid_dout", "yaw_pid_output"))
 
 
 def chassis_mode_name(mode: int) -> str:
@@ -1277,12 +1369,17 @@ class FrameParser:
                 self.last_bad_header = ""
                 self.last_bad_reason = ""
 
-            if version == 8:
+            if version >= 8:
                 frame = self._parse_v7(raw, version, seq, host_rx_ms)
                 metadata = V8_METADATA.unpack_from(raw, HEADER_STRUCT.size + PAYLOAD_STRUCT_V7.size)
                 frame.capabilities, frame.yaw_flags, frame.pitch_flags = metadata[:3]
                 frame.chassis_motor_ids = list(metadata[3:7])
                 frame.gimbal_enabled, frame.gimbal_startup_ready = metadata[7:]
+                if version >= 9:
+                    values = V9_DIAGNOSTICS.unpack_from(raw, HEADER_STRUCT.size + PAYLOAD_STRUCT_V8.size)
+                    for name, value in zip(YAW_DIAGNOSTIC_FIELDS, values):
+                        setattr(frame, name, value)
+                    _validate_yaw_diagnostics(frame)
                 frames.append(frame)
             elif version == 7:
                 frames.append(self._parse_v7(raw, version, seq, host_rx_ms))
