@@ -38,6 +38,19 @@ class FirmwareSafetyTests(unittest.TestCase):
         with self.assertRaises(fw.Failure):
             fw.selected({})
 
+    def test_logger_shares_http_port_and_allows_explicit_split(self):
+        from scripts.dashboard.rtt_ws_bridge import parse_args
+        for extra, expected in (([], None), (["--ws-port", "8765"], 8765)):
+            with self.subTest(extra=extra), patch.object(fw.subprocess, "call", return_value=0) as launch:
+                self.assertEqual(fw.main(["logger", *extra]), 0)
+                command = launch.call_args.args[0]
+                with patch.object(sys, "argv", command[1:]):
+                    args = parse_args()
+                self.assertEqual(args.http_port, 8080)
+                self.assertEqual(args.ws_port, expected)
+                self.assertIsNone(args.ws_host)
+        self.usb.assert_not_called()
+
     def test_configure_defaults_to_reset_run_and_allows_explicit_halt(self):
         # Exercise CLI defaults without configuring tools or accessing the target.
         for extra, expected in (([], "yes"), (["--run-after", "no"], "no")):

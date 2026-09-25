@@ -147,7 +147,8 @@ class RTTWebSocketBridge:
     def viewer_html(self) -> bytes:
         """Load each HTTP request from disk so refresh picks up saved UI changes."""
         viewer = Path(self.args.viewer_file).read_text(encoding="utf-8")
-        config = json.dumps({"wsPort": self.ws_port})
+        # A shared listener must keep the browser's port, which SSH may remap.
+        config = json.dumps({"wsPort": None if self._use_single_listener() else self.ws_port})
         return viewer.replace("</head>", f"<script>window.RTT_CONFIG={config};</script></head>").encode("utf-8")
 
     @property

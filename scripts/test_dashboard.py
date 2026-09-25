@@ -359,11 +359,31 @@ const requestAnimationFrame = callback=>callback();
 
     def test_bridge_injects_selected_websocket_port(self):
         from scripts.dashboard.rtt_ws_bridge import RTTWebSocketBridge, parse_args
-        for options, expected in (([], 8080), (['--ws-port', '8765'], 8765), (['--http-port', '9091'], 9091)):
+        for options, expected in (([], None), (['--ws-port', '8765'], 8765), (['--http-port', '9091'], None)):
             with patch('sys.argv', ['bridge', '--no-monitor-save', *options]):
                 args = parse_args()
             bridge = RTTWebSocketBridge(args)
             self.assertIn(('window.RTT_CONFIG=' + json.dumps({'wsPort': expected})).encode(), bridge.viewer_html)
+
+    def test_browser_keeps_forwarded_port_for_shared_listener(self):
+        from scripts.dashboard.rtt_ws_bridge import RTTWebSocketBridge, parse_args
+        if shutil.which('node') is None:
+            self.skipTest('node is required for browser URL checks')
+        # Execute the page's URL construction with the actual server-injected config.
+        prelude = self.html.split('      function App() {', 1)[1].split('        const [wsUrl,', 1)[0]
+        for options, href, expected in (
+            ([], 'http://localhost:18080/?forwarded=1', 'ws://localhost:18080/'),
+            ([], 'https://example.test/', 'wss://example.test/'),
+            (['--http-port', '9091'], 'http://localhost:19091/', 'ws://localhost:19091/'),
+            (['--ws-port', '8765'], 'http://localhost:18080/', 'ws://localhost:8765/'),
+        ):
+            with self.subTest(href=href, options=options), patch('sys.argv', ['bridge', '--no-monitor-save', *options]):
+                bridge = RTTWebSocketBridge(parse_args())
+                config = bridge.viewer_html.decode().split('window.RTT_CONFIG=', 1)[1].split(';</script>', 1)[0]
+                code = ('const location = new URL(' + json.dumps(href) + ');'
+                        + 'const window = {RTT_CONFIG:' + config + '};' + prelude
+                        + 'require("assert").equal(wsDefault,' + json.dumps(expected) + ');')
+                subprocess.run(['node', '-e', code], check=True)
 
     def test_http_refresh_reads_saved_page_on_both_listeners(self):
         from scripts.dashboard.rtt_ws_bridge import RTTWebSocketBridge, parse_args

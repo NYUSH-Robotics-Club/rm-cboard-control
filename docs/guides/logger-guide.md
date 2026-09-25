@@ -27,6 +27,12 @@ just logger
 `--help` 只验证启动和参数，不连接板卡；实际曲线仍要求匹配的固件 RTT 输出及可用探针。
 默认网页地址为 `http://127.0.0.1:8080/`。
 
+`just logger` 默认让网页和 WebSocket 数据共用 8080。通过 VS Code SSH 访问时，
+在「端口」转发远端 8080，并打开它的本地转发地址；即使本地端口被改号，
+网页也会自动使用相同地址连接数据。更新工具后退出旧 logger、重新启动并刷新网页。
+需要原双端口方式时使用 `just logger --ws-port 8765`，并同时转发两个端口；
+数据端口的本地映射若改号，在网页 Settings 中填写实际 WebSocket URL。
+
 本机 ST-Link 使用 pyOCD 后端；`just logger --backend pyocd` 可显式选择。
 STM32F4 支持包与 Python 包分开安装，见
 [pyOCD 芯片支持说明](https://pyocd.io/docs/target_support.html)。脚本将默认短型号
