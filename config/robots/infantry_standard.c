@@ -62,7 +62,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .tx_slot = 0,
         .direction = -1, // 旧安装方向值；全向轮启用前须核对正转方向。
         .limits.m3508 = {.speed_limit = 10000.0f},
-        .pid_outer = {5.0f, 0.0f, 0.01f, 5000.0f, 7500.0f}, // Speed PID
+        .pid_outer = {15.0f, 0.0f, 0.0f, 12000.0f, 3000.0f}, // Reference infantry speed PID
         .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}          // Not used
     },
 
@@ -78,7 +78,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 1,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {5.0f, 0.0f, 0.01f, 5000.0f, 7500.0f},
+     .pid_outer = {15.0f, 0.0f, 0.0f, 12000.0f, 3000.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 左前轮：CAN1 硬件 ID 3，软件编号 3。
@@ -93,7 +93,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 2,
      .direction = 1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {5.0f, 0.0f, 0.01f, 5000.0f, 7500.0f},
+     .pid_outer = {15.0f, 0.0f, 0.0f, 12000.0f, 3000.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 左后轮：CAN1 硬件 ID 4，软件编号 4。
@@ -108,7 +108,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 3,
      .direction = -1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {5.0f, 0.0f, 0.01f, 5000.0f, 7500.0f},
+     .pid_outer = {15.0f, 0.0f, 0.0f, 12000.0f, 3000.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // ========== SHOOTER MOTORS (3x M3508) ==========
@@ -125,9 +125,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
      .pid_outer =
-         {1.0f, 0.0f, 0.0f, 15000.0f,
-          7500.0f}, // Shooter feed PID (reduced Kp to 1.2, increased Kd to 0.3
-                    // to suppress high-frequency oscillation)
+         {10.0f, 1.0f, 0.0f, 5000.0f,
+          5000.0f}, // Reference infantry loader speed PID
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 左摩擦轮：CAN2 硬件 ID 1，软件编号 6。
@@ -142,7 +141,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 0,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {5.0f, 0.5f, 0.05f, 15000.0f, 7500.0f},
+     .pid_outer = {7.0f, 0.8f, 0.08f, 12000.0f, 20000.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 右摩擦轮：CAN2 硬件 ID 2，软件编号 7。
@@ -157,7 +156,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 1,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {5.0f, 0.5f, 0.05f, 15000.0f, 7500.0f},
+     .pid_outer = {7.0f, 0.8f, 0.08f, 12000.0f, 20000.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // ========== GIMBAL MOTORS (2x GM6020) ==========
@@ -184,9 +183,9 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
             },
         .protocol.dji = {GM6020_COMMAND_CURRENT, 12000}, // 电流原始刻度，5460 约为 1 A。
         // 位置环参数保留；speed_loop_only=true时不执行，恢复后输出仍受模式限速。
-        .pid_outer = {1.0f, 0.0f, 0.0f, 12000.0f, 0.0f},
+        .pid_outer = {28.0f, 0.0f, 1.3f, 2200.0f, 100.0f},
         // 速度误差为RPM、输出为电流原始刻度；保留当前用户PID，反馈失联仍归零。
-        .pid_inner = {240.0f, 0.0f, 0.0f, 6000.0f, 2000.0f}
+        .pid_inner = {300.0f, 135.0f, 0.0f, 26000.0f, 4000.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。
@@ -212,8 +211,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                 .gravity_zero_angle = 1971.0f, // 用户标定的重力机械零点，单位为编码器刻度。
                 .enable_yaw_pitch_compensation = false // 关闭yaw对pitch目标的耦合改写。
             },
-        .pid_outer = {1.0f, 0.0f, 0.1f, 10000.0f, 15000.0f}, // Pitch PID (aggressive: high Kp, low Kd for fast tracking)
-        .pid_inner = {20.0f, 5.0f, 0.0f, 10000.0f, 0.0f}
+        .pid_outer = {22.0f, 0.0f, 1.1f, 950.0f, 100.0f}, // Reference infantry pitch angle PID
+        .pid_inner = {0.0f, 0.0f, 0.0f, 26000.0f, 1800.0f}
     }};
 
 /* 用户确认：X形±45°，前后/左右轮中心距均0.54m，轮半径0.07m，M3508 P19。
