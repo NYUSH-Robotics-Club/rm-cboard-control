@@ -18,8 +18,8 @@
 #include <stdatomic.h>
 #include <string.h>
 
-_Static_assert(sizeof(DashboardPayload) == 412U, "dashboard v9 payload ABI");
-_Static_assert(sizeof(DashboardFrame) == 422U, "dashboard v9 frame ABI");
+_Static_assert(sizeof(DashboardPayload) == 444U, "dashboard v10 payload ABI");
+_Static_assert(sizeof(DashboardFrame) == 454U, "dashboard v10 frame ABI");
 _Static_assert(offsetof(DashboardPayload, yaw_diag_valid) == 300U, "preserve v8 prefix");
 
 static uint8_t s_initialized;
@@ -130,11 +130,15 @@ static void fill_sources(DashboardPayload *p, uint32_t now) {
       if (!config || config->vendor != MOTOR_VENDOR_DJI) continue;
       if (fresh_motor(p->chassis_motor_ids[i], now, &snapshot)) {
         p->motor_rpm[i] = snapshot.speed;
+        p->chassis_current_actual_raw[i] = snapshot.torque_or_current;
         p->motor_online_bitmap |= (uint8_t)(1U << i);
       }
       /* 控制器目标为转子RPM，保持其真实数组顺序并随帧携带软件ID。 */
       if (s_chassis_subscribed && s_chassis_seen && (uint32_t)(now - s_chassis_ms) <= 100U)
         p->motor_target_rpm[i] = chassis->target_speeds[i];
+      if (chassis->running && s_chassis_subscribed && s_chassis_seen &&
+          (uint32_t)(now - s_chassis_ms) <= 100U)
+        p->chassis_pid_output[i] = chassis->speed_pids[i].output;
     }
     if (p->motor_online_bitmap) p->status_flags |= 0x10U;
   }
@@ -162,6 +166,8 @@ void Dashboard_Step(void) {
     .chassis_power_scale = NAN,
     .motor_target_rpm = {NAN, NAN, NAN, NAN},
     .motor_rpm = {NAN, NAN, NAN, NAN},
+    .chassis_pid_output = {NAN, NAN, NAN, NAN},
+    .chassis_current_actual_raw = {NAN, NAN, NAN, NAN},
     .imu_angle_deg = {NAN, NAN, NAN},
     .imu_gyro_deg_s = {NAN, NAN, NAN},
     .gimbal_yaw_target_deg = NAN,

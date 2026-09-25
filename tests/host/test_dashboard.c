@@ -20,7 +20,9 @@ static uint32_t now = 1000, feedback_ms = 1000;
 static unsigned writes;
 static bool full;
 static DashboardFrame captured;
-static ChassisController chassis = {.target_speeds = {100, -200, 300, -400}};
+static ChassisController chassis = {.target_speeds = {100, -200, 300, -400}, .running = true,
+    .speed_pids = {{.output = 101}, {.output = -202}, {.output = 303}, {.output = -404}},
+    .motor_feedbacks = {{.current = 11}, {.current = -22}, {.current = 33}, {.current = -44}}};
 static const MotorConfig_t motors[] = {
     {.motor_id = 2, .can_channel = CAN_CHANNEL_1},
     {.motor_id = 1, .can_channel = CAN_CHANNEL_1},
@@ -36,7 +38,8 @@ const MotorConfig_t *MotorService_GetConfig(uint8_t id) {
 }
 RobotStatus MotorService_GetSnapshot(uint8_t id, MotorSnapshot *out) {
     *out = (MotorSnapshot){.initialized = true, .feedback_valid = true,
-        .feedback_timestamp_ms = feedback_ms, .speed = id * 10.0f};
+        .feedback_timestamp_ms = feedback_ms, .speed = id * 10.0f,
+        .torque_or_current = id * 100.0f};
     return ROBOT_STATUS_OK;
 }
 const ChassisController *ChassisApp_GetController(void) { return &chassis; }
@@ -80,7 +83,7 @@ int main(void) {
         .pitch = {.flags = 31, .position_actual_ticks = 2048, .position_target_ticks = 1024,
             .speed_actual_rpm = -2, .speed_target_rpm = -3, .encoder_raw = 2048}};
     Dashboard_Step();
-    assert(captured.version == 9 && captured.payload_len == (412 & 255));
+    assert(captured.version == 10 && captured.payload_len == (444 & 255));
     assert(captured.payload.yaw_diag_valid == 1 && captured.payload.yaw_rc_ch0 == -660);
     assert(captured.payload.yaw_rc_sequence == 17 && captured.payload.yaw_route_sequence == 122);
     assert(captured.payload.yaw_command_raw == 321 && captured.payload.yaw_current_actual_raw == -1234);
@@ -96,6 +99,8 @@ int main(void) {
     assert(captured.payload.gimbal_pitch_target_deg == 45);
     assert(fabsf(captured.payload.imu_gyro_deg_s[2] - 57.29578f) < 0.001f);
     assert(captured.payload.motor_rpm[0] == 20 && captured.payload.motor_target_rpm[1] == -200);
+    assert(captured.payload.chassis_pid_output[0] == 101 && captured.payload.chassis_pid_output[3] == -404);
+    assert(captured.payload.chassis_current_actual_raw[0] == 200 && captured.payload.chassis_current_actual_raw[3] == 300);
     assert(isnan(captured.payload.chassis_power)); emit();
     now += 201; Dashboard_Step();
     assert(captured.payload.link_bitmap_packed == 0 && captured.payload.status_flags == 0);

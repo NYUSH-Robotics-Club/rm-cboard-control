@@ -17,6 +17,10 @@
 #define SPIN_TRANSLATE_LIMIT_NORM (1.00f)
 #define SPIN_GIMBAL_YAW_ADJ_DEG_PER_S (120.0f)
 
+#define DIAL_ENTER_DEADBAND (30)
+#define DIAL_EXIT_DEADBAND  (15)
+#define DIAL_WZ_SLEW_PER_S  (3.0f)
+
 static float normalize_angle_180(float angle_deg) {
     while (angle_deg > 180.0f) {
         angle_deg -= 360.0f;
@@ -45,8 +49,10 @@ static int16_t apply_deadband(int16_t value) {
                : value;
 }
 
-static void route_chassis(const CommandRouterInput *input,
+static void route_chassis(CommandRouter *router,
+                          const CommandRouterInput *input,
                           uint32_t now_ms,
+                          float dt_s,
                           bool spin_mode,
                           bool gimbal_follow_mode,
                           ChassisCmd *command) {
@@ -54,11 +60,41 @@ static void route_chassis(const CommandRouterInput *input,
     const SensorData *sensor = &input->sensor;
     int16_t vx_raw = apply_deadband(remote->rc.ch[3]);
     int16_t vy_raw = apply_deadband(remote->rc.ch[2]);
-    int16_t wz_raw = apply_deadband(remote->rc.ch[4]);
+    int16_t dial_raw = remote->rc.ch[4];
+
     const float max_input = (float)(RC_CH_VALUE_MAX - RC_CH_VALUE_OFFSET);
-    float vx = -(float)vx_raw / max_input;
-    float vy = (float)vy_raw / max_input;
-    float wz = (float)wz_raw / max_input;
+    float vx = +(float)vx_raw / max_input;
+    float vy = -(float)vy_raw / max_input;
+
+    /* 拨轮使用独立滞回，避免零点附近噪声反复换向。 */
+    float dial_abs = fabsf((float)dial_raw);
+
+    if (!router->dial_active) {
+        if (dial_abs >= (float)DIAL_ENTER_DEADBAND) {
+            router->dial_active = true;
+        }
+    } else if (dial_abs <= (float)DIAL_EXIT_DEADBAND) {
+        router->dial_active = false;
+    }
+
+    float dial_target_wz = 0.0f;
+
+    if (router->dial_active) {
+        dial_target_wz = (float)dial_raw / max_input;
+    }
+
+    /* 限制旋转指令变化速度，避免一帧内直接反向。 */
+    float max_step = DIAL_WZ_SLEW_PER_S * dt_s;
+    float delta = dial_target_wz - router->dial_wz;
+
+    if (delta > max_step) {
+        delta = max_step;
+    } else if (delta < -max_step) {
+        delta = -max_step;
+    }
+
+    router->dial_wz += delta;
+    float wz = router->dial_wz;
 
     if (gimbal_follow_mode && input->encoder_follow) {
         /* 用实际云台相对角旋转平移向量，+x前、+y左；不再额外交换轴。
@@ -68,10 +104,15 @@ static void route_chassis(const CommandRouterInput *input,
             (uint32_t)(now_ms - input->yaw_feedback_ms) > FOLLOW_FEEDBACK_TIMEOUT_MS) {
             return;
         }
-        gimbal_to_chassis_frame(vx, vy, input->yaw_relative_deg,
+        /* yaw_relative_deg描述底盘相对云台的逆时针角；将云台坐标向量
+         * 变回底盘坐标时必须使用逆旋转。否则云台在±90度时前后方向反转。 */
+        gimbal_to_chassis_frame(vx, vy, -input->yaw_relative_deg,
                                &command->vx, &command->vy);
         command->wz = wz;
-        command->enabled = (vx_raw != 0 || vy_raw != 0 || wz_raw != 0);
+        command->enabled =
+        (vx_raw != 0) ||
+        (vy_raw != 0) ||
+        (fabsf(router->dial_wz) > 0.0001f);
         return;
     }
 
@@ -107,7 +148,10 @@ static void route_chassis(const CommandRouterInput *input,
         command->wz = wz;
     }
 
-    command->enabled = (vx_raw != 0 || vy_raw != 0 || wz_raw != 0);
+    command->enabled = (
+        vx_raw != 0 ||
+        vy_raw != 0 ||
+        (fabsf(router->dial_wz) > 0.0001f));
 }
 
 static void route_shooter(CommandRouter *router, const RemoteControlMessage *remote,
@@ -192,6 +236,8 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
         router->spin_mode = false;
         router->gimbal_follow_mode = false;
         router->route_time_valid = false;
+        router->dial_wz = 0.0f;
+        router->dial_active = false;
         return ROBOT_STATUS_NOT_READY;
     }
 
@@ -204,7 +250,14 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
     router->route_time_valid = true;
 
     bool follow_now = switch_is_mid(input->remote.rc.s[1]);
+    bool was_spin = router->spin_mode;
     bool spin_now = switch_is_up(input->remote.rc.s[1]);
+    router->spin_mode = spin_now;
+    router->gimbal_follow_mode = follow_now;
+     if (spin_now || was_spin) {
+      router->dial_wz = 0.0f;
+      router->dial_active = false;
+    }
     if (spin_now && !router->spin_mode) {
         router->spin_hold_yaw_deg = input->sensor.yaw_total_angle;
     }
@@ -212,8 +265,10 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
     router->gimbal_follow_mode = follow_now;
 
     memset(output, 0, sizeof(*output));
-    route_chassis(input,
+    route_chassis(router,
+                  input,
                   now_ms,
+                  dt_s,
                   router->spin_mode,
                   router->gimbal_follow_mode,
                   &output->chassis);

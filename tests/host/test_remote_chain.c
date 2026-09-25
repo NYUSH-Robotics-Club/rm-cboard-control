@@ -87,7 +87,7 @@ static void receive(const uint8_t *bytes, uint16_t size)
 int main(void)
 {
     robot = g_robot_config_infantry_standard;
-    assert(robot.chassis_follow && robot.chassis_follow->yaw_forward_ticks == 4555U);
+    assert(robot.chassis_follow && robot.chassis_follow->yaw_forward_ticks == 4890U);
     follow = *robot.chassis_follow;
     follow.yaw_ccw_sign = 1; /* 先测正向，再测反向；不依赖实车安装方向配置。 */
     robot.chassis_follow = &follow;

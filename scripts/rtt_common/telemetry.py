@@ -8,8 +8,8 @@ from typing import Dict, List
 
 MAGIC = 0x4452
 MAGIC_ALT = 0x5244
-CURRENT_VERSION = 9
-SUPPORTED_VERSIONS = (3, 4, 5, 6, 7, 8, 9)
+CURRENT_VERSION = 10
+SUPPORTED_VERSIONS = (3, 4, 5, 6, 7, 8, 9, 10)
 
 HEADER_STRUCT = struct.Struct("<HBBI")
 PAYLOAD_STRUCT_V3 = struct.Struct("<Iff4f4f3f3f11f10B8h2BH8BII7fBHBB15fH")
@@ -23,6 +23,8 @@ V8_METADATA = struct.Struct("<IBB4BBB")
 # v9 appends one callback snapshot; the v8 prefix stays byte-for-byte compatible.
 V9_DIAGNOSTICS = struct.Struct("<9Iif2I2fI3i9f")
 PAYLOAD_STRUCT_V9 = struct.Struct(PAYLOAD_STRUCT_V8.format + V9_DIAGNOSTICS.format[1:])
+# v10 appends four speed-PID outputs and four current feedback values.
+PAYLOAD_STRUCT_V10 = struct.Struct(PAYLOAD_STRUCT_V9.format + "8f")
 YAW_DIAGNOSTIC_FIELDS = (
     "yaw_diag_valid",
     "yaw_sample_ms",
@@ -62,6 +64,7 @@ PAYLOAD_STRUCTS: Dict[int, struct.Struct] = {
     7: PAYLOAD_STRUCT_V7,
     8: PAYLOAD_STRUCT_V8,
     9: PAYLOAD_STRUCT_V9,
+    10: PAYLOAD_STRUCT_V10,
 }
 PAYLOAD_SIZES = {version: payload_struct.size for version, payload_struct in PAYLOAD_STRUCTS.items()}
 PAYLOAD_SIZE = PAYLOAD_SIZES[CURRENT_VERSION]
@@ -203,6 +206,8 @@ class TelemetryFrame:
     yaw_flags: int = 0
     pitch_flags: int = 0
     chassis_motor_ids: List[int] = dataclasses.field(default_factory=lambda: [0] * 4)
+    chassis_pid_output: List[float] = dataclasses.field(default_factory=lambda: [float("nan")] * 4)
+    chassis_current_actual_raw: List[float] = dataclasses.field(default_factory=lambda: [float("nan")] * 4)
     gimbal_enabled: int = 0
     gimbal_startup_ready: int = 0
     # Absent legacy diagnostics remain NaN, never plausible zero measurements.
@@ -1380,6 +1385,10 @@ class FrameParser:
                     for name, value in zip(YAW_DIAGNOSTIC_FIELDS, values):
                         setattr(frame, name, value)
                     _validate_yaw_diagnostics(frame)
+                if version >= 10:
+                    values = struct.unpack_from("<8f", raw, HEADER_STRUCT.size + PAYLOAD_STRUCT_V9.size)
+                    frame.chassis_pid_output = list(values[:4])
+                    frame.chassis_current_actual_raw = list(values[4:])
                 frames.append(frame)
             elif version == 7:
                 frames.append(self._parse_v7(raw, version, seq, host_rx_ms))

@@ -19,18 +19,18 @@
 #include "infantry_standard.h"
 
 static const ChassisFollowConfig s_chassis_follow = {
-    .yaw_forward_ticks = 4555U, /* 用户确认的头朝前绝对编码。 */
+    .yaw_forward_ticks = 4890U, /* 用户确认的头朝前绝对编码。 */
     .yaw_ccw_sign = -1,         /* 暂按增大为左转；安装方向尚待实车确认。 */
 };
 
 /* 手动输入按度/秒积分；普通推杆与回中共用限速。 */
 static const YawControlConfig s_yaw_control = {
-    .manual_rate_deg_s = 100.0f,
-    .target_lead_deg = 30.0f,
-    .manual_speed_rpm = 30.0f,
+    .manual_rate_deg_s = 300.0f,
+    .target_lead_deg = 15.0f,
+    .manual_speed_rpm = 60.0f,
     .vision_speed_rpm = 10.0f,
     .spin_speed_rpm = 10.0f,
-    .speed_loop_only = true /* 步兵暂时旁路位置环；哨兵保留串级。 */
+    .speed_loop_only = false /* 步兵暂时旁路位置环；哨兵保留串级。 */
 };
 
 /**
@@ -62,7 +62,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .tx_slot = 0,
         .direction = -1, // 旧安装方向值；全向轮启用前须核对正转方向。
         .limits.m3508 = {.speed_limit = 10000.0f},
-        .pid_outer = {15.0f, 0.0f, 0.0f, 12000.0f, 3000.0f}, // Reference infantry speed PID
+        .pid_outer = {10.0f, 0.0f, 0.0f, 12000.0f, 3000.0f}, // Reference infantry speed PID
         .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}          // Not used
     },
 
@@ -78,7 +78,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 1,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {15.0f, 0.0f, 0.0f, 12000.0f, 3000.0f},
+     .pid_outer = {10.0f, 0.0f, 0.0f, 12000.0f, 3000.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 左前轮：CAN1 硬件 ID 3，软件编号 3。
@@ -93,7 +93,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 2,
      .direction = 1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {15.0f, 0.0f, 0.0f, 12000.0f, 3000.0f},
+     .pid_outer = {10.0f, 0.0f, 0.0f, 12000.0f, 3000.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 左后轮：CAN1 硬件 ID 4，软件编号 4。
@@ -183,9 +183,9 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
             },
         .protocol.dji = {GM6020_COMMAND_CURRENT, 12000}, // 电流原始刻度，5460 约为 1 A。
         // 位置环参数保留；speed_loop_only=true时不执行，恢复后输出仍受模式限速。
-        .pid_outer = {28.0f, 0.0f, 1.3f, 2200.0f, 100.0f},
+        .pid_outer = {0.075f, 0.0f, 0.0f, 2200.0f, 100.0f},
         // 速度误差为RPM、输出为电流原始刻度；保留当前用户PID，反馈失联仍归零。
-        .pid_inner = {300.0f, 135.0f, 0.0f, 26000.0f, 4000.0f}
+        .pid_inner = {300.0f, 108.0f, 0.0f, 26000.0f, 4000.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。

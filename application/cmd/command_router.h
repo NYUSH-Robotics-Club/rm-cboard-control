@@ -43,6 +43,8 @@ typedef struct {
     bool route_time_valid;
     bool shooter_down_seen; /* Startup or link loss requires a fresh down position. */
     GimbalCmd gimbal_memory;
+    float dial_wz;/* 平滑后的底盘旋转输入，归一化单位，范围约为-1到1。 */
+    bool dial_active;/* 拨轮是否越过进入阈值；掉线和spin模式时清零。 */
 } CommandRouter;
 
 void CommandRouter_Init(CommandRouter *router);

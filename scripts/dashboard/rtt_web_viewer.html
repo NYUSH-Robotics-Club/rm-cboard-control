@@ -410,6 +410,7 @@
         7: 288,
         8: 300,
         9: 412,
+        10: 444,
       };
 
       // Match firmware modules/algorithm/crc16.c (table starts with 0x0000, 0x1189, ...)
@@ -1613,6 +1614,11 @@
                 latest.yaw_pid_kd = readF32();
                 latest.yaw_pid_output_max = readF32();
                 latest.yaw_pid_integral_max = readF32();
+              }
+
+              if (version >= 10) {
+                latest.chassis_pid_output = readF32Array(4);
+                latest.chassis_current_actual_raw = readF32Array(4);
               }
 
               if ((store.lastSeq !== null && seq < store.lastSeq) ||

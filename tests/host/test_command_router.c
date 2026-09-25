@@ -25,7 +25,7 @@ static void test_encoder_follow(void)
         assert(CommandRouter_Route(&router, &input, 1000, &output) == ROBOT_STATUS_OK);
         assert(output.gimbal_follow_mode && output.chassis.enabled);
         float angle = degrees * 0.0174532925199433f;
-        assert(fabsf(output.chassis.vx - cosf(angle)) < 0.0001f);
+        assert(fabsf(output.chassis.vx + cosf(angle)) < 0.0001f);
         assert(fabsf(output.chassis.vy - sinf(angle)) < 0.0001f);
         assert(output.chassis.wz == 0);
 

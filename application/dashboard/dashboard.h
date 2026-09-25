@@ -1,4 +1,4 @@
-/* 将应用诊断打包为RTT遥测。版本9保留版本8前缀，并附带同回调的yaw输入/闭环诊断。
+/* 将应用诊断打包为RTT遥测。版本10保留版本9前缀，并附带底盘速度环诊断。
  * 浮点NaN表示未接入、过期或未启用的测量/目标，不能画成零值。只观察，不改变控制。
  */
 #ifndef RM_DASHBOARD_H
@@ -9,7 +9,7 @@
 #define DASHBOARD_RTT_CHANNEL 1U
 #define DASHBOARD_RTT_BUFFER_SIZE 2048U
 #define DASHBOARD_FRAME_MAGIC 0x4452U
-#define DASHBOARD_FRAME_VERSION 9U
+#define DASHBOARD_FRAME_VERSION 10U
 
 enum {
   DASHBOARD_CAN = 1U,      /* CAN位表示该总线有配置电机在100ms内反馈，不代表总线无错误。 */
@@ -64,6 +64,10 @@ typedef struct {
   int32_t yaw_command_status, yaw_command_raw, yaw_current_actual_raw;
   float yaw_pid_pout, yaw_pid_iout, yaw_pid_dout, yaw_pid_output;
   float yaw_pid_kp, yaw_pid_ki, yaw_pid_kd, yaw_pid_output_max, yaw_pid_integral_max;
+  /* 四轮顺序与chassis_motor_ids、motor_target_rpm和motor_rpm一致。
+   * pid_output是速度PID最终输出的原始电流刻度；current_actual_raw是电调反馈原始刻度。
+   * 无新鲜反馈或控制未运行时发布NaN，避免把停机零值当成有效调节数据。 */
+  float chassis_pid_output[4], chassis_current_actual_raw[4];
 } DashboardPayload;
 typedef struct { uint16_t magic; uint8_t version, payload_len; uint32_t seq; DashboardPayload payload; uint16_t crc16; } DashboardFrame;
 #pragma pack(pop)
