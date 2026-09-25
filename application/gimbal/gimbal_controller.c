@@ -47,6 +47,9 @@ static void command_axis(uint8_t id, int16_t command) {
 // Gimbal tilt compensation parameters
 #define GIMBAL_HEIGHT_CM (30.0f)  // 云台距地面高度 30cm
 #define COMPENSATION_UPDATE_RATE_MS (100) // 更新补偿值的频率 100ms
+#define YAW_REVERSE_INTEGRAL_FACTOR (0.20f)
+#define YAW_TARGET_ZERO_EPS_RPM (0.5f)
+#define YAW_STOP_SPEED_EPS_RPM (1.0f)
 
 // Static state for application
 static GimbalCmd s_last_cmd;
@@ -55,6 +58,9 @@ static bool s_initialized = false;
 static bool s_startup_position_captured = false;
 static bool s_feedback_stable_seen;
 static uint32_t s_feedback_stable_since_ms;
+static float s_yaw_last_speed_target_rpm;
+static bool s_yaw_speed_target_valid;
+
 
 static void yaw_invalidate(void);
 
@@ -73,6 +79,47 @@ static bool calculate_feedforward(const GimbalFeedforwardConfig *cfg,
   *output = fmaxf(-cfg->output_max, fminf(value, cfg->output_max));
   return true;
 }
+
+static void yaw_clear_speed_integral(MotorContext_t *yaw,
+                                       float speed_feedback) {
+    PID_Controller *pid;
+
+    if (!yaw) return;
+
+    pid = &yaw->pid_inner;
+    pid->integral = 0.0f;
+    pid->iout = 0.0f;
+    pid->iterm = 0.0f;
+    pid->error[0] = 0.0f;
+    pid->error[1] = 0.0f;
+    pid->error[2] = 0.0f;
+    pid->output = 0.0f;
+    pid->last_output = 0.0f;
+    pid->last_dout = 0.0f;
+    pid->dout = 0.0f;
+    pid->last_measure = speed_feedback;
+  }
+
+  static void yaw_bleed_speed_integral(MotorContext_t *yaw,
+                                       float speed_feedback,
+                                       float factor) {
+    PID_Controller *pid;
+
+    if (!yaw) return;
+
+    pid = &yaw->pid_inner;
+    pid->integral *= factor;
+    pid->iout *= factor;
+    pid->iterm = 0.0f;
+    pid->error[0] = 0.0f;
+    pid->error[1] = 0.0f;
+    pid->error[2] = 0.0f;
+    pid->output *= factor;
+    pid->last_output *= factor;
+    pid->last_dout = 0.0f;
+    pid->dout = 0.0f;
+    pid->last_measure = speed_feedback;
+  }
 
 /* Never close a position loop on a sample older than 100 ms. */
 static bool axis_feedback_fresh(uint8_t id, uint32_t now_ms) {
@@ -292,6 +339,7 @@ static void yaw_invalidate(void) {
   s_yaw_reference.valid = false;
   s_yaw_mode_valid = false;
   s_startup_position_captured = false;
+  s_yaw_last_speed_target_rpm = 0.0f;
   s_feedback_stable_seen = false;
 }
 
@@ -378,9 +426,52 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     speed_target = PID_CalculateDivided(&yaw->pid_outer, 0.0f, -angle_error,
                                         PID_YAW_OUTER_DIVIDER);
   }
-  speed_target = fmaxf(-rpm_limit, fminf(speed_target, rpm_limit));
-  /* 用模式限速后的目标做前馈；速度环调试同样生效，不重新闭合位置环。 */
+ speed_target = fmaxf(-rpm_limit, fminf(speed_target, rpm_limit));
+
+  bool target_is_zero =
+      fabsf(speed_target) <= YAW_TARGET_ZERO_EPS_RPM;
+
+  bool entered_zero =
+      target_is_zero &&
+      (!s_yaw_speed_target_valid ||
+       fabsf(s_yaw_last_speed_target_rpm) > YAW_TARGET_ZERO_EPS_RPM);
+
+  bool reversed =
+      s_yaw_speed_target_valid &&
+      s_yaw_last_speed_target_rpm > YAW_TARGET_ZERO_EPS_RPM &&
+      speed_target < -YAW_TARGET_ZERO_EPS_RPM;
+
+  reversed = reversed ||
+      (s_yaw_speed_target_valid &&
+       s_yaw_last_speed_target_rpm < -YAW_TARGET_ZERO_EPS_RPM &&
+       speed_target > YAW_TARGET_ZERO_EPS_RPM);
+
+  if (entered_zero) {
+    yaw_clear_speed_integral(yaw, speed_feedback);
+  }
+
+  if (reversed) {
+    yaw_bleed_speed_integral(yaw,
+                             speed_feedback,
+                             YAW_REVERSE_INTEGRAL_FACTOR);
+  }
+
+  /*
+   * 目标为0且电机已经基本停止时，不再让Ki积累静止噪声，
+   * 也不保留上一方向的残余电流。
+   */
+  if (target_is_zero &&
+      fabsf(speed_feedback) <= YAW_STOP_SPEED_EPS_RPM) {
+    yaw_clear_speed_integral(yaw, speed_feedback);
+
+    s_yaw_last_speed_target_rpm = speed_target;
+    s_yaw_speed_target_valid = true;
+    return 0;
+  }
+
+  /* 用模式限速后的目标做前馈；速度环调试同样生效。 */
   float feedforward;
+
   if (!calculate_feedforward(&yaw->config->feedforward, speed_target, &feedforward)) {
     yaw_invalidate();
     return 0;
@@ -392,7 +483,12 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     return 0;
   }
   float limit = (float)MotorDriver_GetCommandLimit(s_yaw_motor_id);
-  return (int16_t)fmaxf(-limit, fminf(current, limit));
+  int16_t command = (int16_t)fmaxf(-limit, fminf(current, limit));
+
+  s_yaw_last_speed_target_rpm = speed_target;
+  s_yaw_speed_target_valid = true;
+
+  return command;
 }
 
 /**

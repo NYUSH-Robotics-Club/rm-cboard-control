@@ -166,7 +166,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .vendor = MOTOR_VENDOR_DJI,
         .type = MOTOR_TYPE_GM6020,
         .role = MOTOR_ROLE_GIMBAL_YAW,
-        .feedforward = {.velocity_gain = 0.0f, .bias = 0.0f, .output_max = 0.0f},
+        .feedforward = {.velocity_gain = 70.0f, .bias = 0.0f, .output_max = 1500.0f},
         .yaw_control = &s_yaw_control,
         .control_mode = MOTOR_CONTROL_APPLICATION,
         .can_channel = CAN_CHANNEL_1,
