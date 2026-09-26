@@ -16,6 +16,7 @@
 #define SPIN_WZ_NORM (0.33f)
 #define SPIN_TRANSLATE_LIMIT_NORM (1.00f)
 #define SPIN_GIMBAL_YAW_ADJ_DEG_PER_S (120.0f)
+#define YAW_TO_CHASSIS_BIAS_DEG (0.0f)
 
 #define DIAL_ENTER_DEADBAND (30)
 #define DIAL_EXIT_DEADBAND  (15)
@@ -116,42 +117,60 @@ static void route_chassis(CommandRouter *router,
         return;
     }
 
-    if (spin_mode || gimbal_follow_mode) {
+    if (spin_mode) {
+        float yaw_world =
+            normalize_angle_180(sensor->yaw_total_angle);
+        float chassis_world =
+            normalize_angle_180(sensor->c_yaw);
+        float yaw_to_chassis = normalize_angle_180(
+            yaw_world - chassis_world + YAW_TO_CHASSIS_BIAS_DEG);
+        float chassis_vx = 0.0f;
+        float chassis_vy = 0.0f;
+
+        gimbal_to_chassis_frame(vx, vy, yaw_to_chassis,
+                                &chassis_vx, &chassis_vy);
+
+        float magnitude = sqrtf(chassis_vx * chassis_vx +
+                                chassis_vy * chassis_vy);
+
+        if (magnitude > SPIN_TRANSLATE_LIMIT_NORM) {
+            float scale = SPIN_TRANSLATE_LIMIT_NORM / magnitude;
+            chassis_vx *= scale;
+            chassis_vy *= scale;
+        }
+
+        command->vx = chassis_vx;
+        command->vy = chassis_vy;
+        command->wz = SPIN_WZ_NORM;
+        command->enabled = true;
+        return;
+    }
+
+    if (gimbal_follow_mode) {
         float gimbal_yaw = normalize_angle_180(sensor->yaw_total_angle);
         float chassis_yaw = normalize_angle_180(sensor->c_yaw);
         float offset = normalize_angle_180(chassis_yaw - gimbal_yaw);
         float chassis_vx = 0.0f;
         float chassis_vy = 0.0f;
-        gimbal_to_chassis_frame(vx, vy, offset, &chassis_vx, &chassis_vy);
 
-        if (spin_mode) {
-            float magnitude = sqrtf(chassis_vx * chassis_vx +
-                                    chassis_vy * chassis_vy);
-            if (magnitude > SPIN_TRANSLATE_LIMIT_NORM) {
-                float scale = SPIN_TRANSLATE_LIMIT_NORM / magnitude;
-                chassis_vx *= scale;
-                chassis_vy *= scale;
-            }
-            command->vx = chassis_vy;
-            command->vy = -chassis_vx;
-            command->wz = SPIN_WZ_NORM;
-            command->enabled = true;
-            return;
-        }
-
+        gimbal_to_chassis_frame(vx, vy, offset,
+                                &chassis_vx, &chassis_vy);
         command->vx = chassis_vy;
         command->vy = -chassis_vx;
         command->wz = wz;
-    } else {
+        command->enabled = (vx_raw != 0 || vy_raw != 0 ||
+                            fabsf(router->dial_wz) > 0.0001f);
+        return;
+    }
+
+    {
         command->vx = vx;
         command->vy = vy;
         command->wz = wz;
     }
 
-    command->enabled = (
-        vx_raw != 0 ||
-        vy_raw != 0 ||
-        (fabsf(router->dial_wz) > 0.0001f));
+    command->enabled = (vx_raw != 0 || vy_raw != 0 ||
+                        fabsf(router->dial_wz) > 0.0001f);
 }
 
 static void route_shooter(CommandRouter *router, const RemoteControlMessage *remote,
@@ -258,7 +277,8 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
       router->dial_wz = 0.0f;
       router->dial_active = false;
     }
-    if (spin_now && !router->spin_mode) {
+    /* Capture the world heading exactly once when entering spin mode. */
+    if (spin_now && !was_spin) {
         router->spin_hold_yaw_deg = input->sensor.yaw_total_angle;
     }
     router->spin_mode = spin_now;

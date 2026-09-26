@@ -104,6 +104,7 @@ int main(void)
     assert(output.spin_mode && output.chassis.enabled);
     assert(!output.shooter.feed_enabled && !output.shooter.friction_enabled);
     const float first_target = output.spin_hold_yaw_deg;
+    assert(first_target == input.sensor.yaw_total_angle);
 
     assert(CommandRouter_Route(&router, &input, 1010U, &output) ==
            ROBOT_STATUS_OK);

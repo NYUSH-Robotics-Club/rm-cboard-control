@@ -9,7 +9,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from scripts.rtt_common.telemetry import TelemetryFrame, YAW_DIAGNOSTIC_FIELDS
+from scripts.rtt_common.telemetry import (
+    PITCH_DIAGNOSTIC_FIELDS,
+    TelemetryFrame,
+    YAW_DIAGNOSTIC_FIELDS,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_MONITOR_DIR = ROOT_DIR / "monitor"
@@ -100,7 +104,7 @@ MONITOR_COLUMNS = (
     "chassis_current_actual_raw_0", "chassis_current_actual_raw_1", "chassis_current_actual_raw_2", "chassis_current_actual_raw_3",
     "rc_rocker_r_x", "rc_rocker_r_y", "rc_rocker_l_x", "rc_rocker_l_y", "rc_dial", "rc_switches",
     "gimbal_yaw_encoder_raw", "telemetry_drop_count",
-) + YAW_DIAGNOSTIC_FIELDS + ("yaw_rc_age_ms", "yaw_command_age_ms", "yaw_feedback_age_ms")
+) + YAW_DIAGNOSTIC_FIELDS + ("yaw_rc_age_ms", "yaw_command_age_ms", "yaw_feedback_age_ms") + PITCH_DIAGNOSTIC_FIELDS
 
 
 def resolve_monitor_dir(path: str | Path) -> Path:
@@ -227,7 +231,7 @@ def _frame_row_values(frame: TelemetryFrame) -> tuple[object, ...]:
         _age_ms(frame.yaw_sample_ms, frame.yaw_rc_dispatch_ms),
         _age_ms(frame.yaw_sample_ms, frame.yaw_route_ms),
         _age_ms(frame.yaw_sample_ms, frame.yaw_feedback_ms),
-    )
+    ) + tuple(getattr(frame, name) for name in PITCH_DIAGNOSTIC_FIELDS)
 
 
 class MonitorWriter:

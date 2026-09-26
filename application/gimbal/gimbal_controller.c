@@ -129,6 +129,17 @@ static bool axis_feedback_fresh(uint8_t id, uint32_t now_ms) {
          (uint32_t)(now_ms - motor->last_feedback_time) <= 100U;
 }
 
+/* Pitch 的绝对编码超出配置范围时立即禁止双轴输出，等待人工把机构移回安全区。 */
+static bool pitch_position_safe(void) {
+  if (s_pitch_motor_id == 0xFF) return true;
+  MotorContext_t *pitch = MotorDriver_GetContext(s_pitch_motor_id);
+  if (!pitch || !pitch->config || pitch->role != MOTOR_ROLE_GIMBAL_PITCH) return false;
+  float angle = (float)pitch->angle_raw;
+  return isfinite(angle) &&
+      angle >= pitch->config->limits.gm6020.angle_min &&
+      angle <= pitch->config->limits.gm6020.angle_max;
+}
+
 /*
  * The yaw/pitch coupling calculation needs two real yaw samples.  Treating the
  * encoder's power-on value as movement from zero would change the pitch target
@@ -210,7 +221,8 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
 
   // Joystick control with sensitivity scaling
   float sensitivity = 60.0f; // Increased for more responsive tracking
-  c->angle_target += c->config->direction * sensitivity * rate_normalized;
+  float pitch_delta_ticks = c->config->direction * sensitivity * rate_normalized;
+  c->angle_target += pitch_delta_ticks;
 
   /* 旧视线耦合模型需按机械结构验证，只在配置显式开启且非自瞄时改写目标。
    * 关闭时仍跟踪相邻yaw反馈，避免重新开启时补算关闭期间的累计转角。 */
@@ -276,6 +288,29 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
   }
 
   float current_angle = (float)c->angle_raw;
+  if (is_pitch_motor && !pitch_position_safe()) {
+    /* 越界时不继续计算环路，避免误差展开后把命令打到电气上限。 */
+    PID_Reset(&c->pid_outer);
+    PID_Reset(&c->pid_inner);
+    c->angle_target = current_angle;
+    return 0;
+  }
+  if (is_pitch_motor) {
+    const float endpoint_margin_ticks = 4.0f;
+    float lower = c->config->limits.gm6020.angle_min;
+    float upper = c->config->limits.gm6020.angle_max;
+    bool pushing_lower = current_angle <= lower + endpoint_margin_ticks &&
+                         pitch_delta_ticks < 0.0f;
+    bool pushing_upper = current_angle >= upper - endpoint_margin_ticks &&
+                         pitch_delta_ticks > 0.0f;
+    if (pushing_lower || pushing_upper) {
+      /* Reject only the outward joystick delta; inward motion remains available. */
+      c->angle_target = current_angle;
+      PID_Reset(&c->pid_outer);
+      PID_Reset(&c->pid_inner);
+      return 0;
+    }
+  }
   float error = c->angle_target - current_angle;
   if (error > max_encoder / 2.0f)
     error -= max_encoder;
@@ -374,7 +409,7 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     return 0;
   }
   float speed_feedback = mode == YAW_CONTROL_SPIN ?
-      -sensor_data->g_gz * 30.0f / (float)M_PI : (float)yaw->speed_rpm;
+      sensor_data->g_gz * 30.0f / (float)M_PI : (float)yaw->speed_rpm;
   bool mode_changed = !s_yaw_mode_valid || mode != s_yaw_mode;
   if (mode_changed) {
     s_yaw_reference.target_ticks = s_yaw_reference.position_ticks;
@@ -626,7 +661,7 @@ static void process_gimbal_cmd(const MsgEvent *ev, void *user) {
       s_feedback_stable_seen = true;
       s_feedback_stable_since_ms = now_ms;
     }
-    bool startup_ready = fresh && s_feedback_stable_seen &&
+    bool startup_ready = fresh && s_feedback_stable_seen && pitch_position_safe() &&
         (uint32_t)(now_ms - s_feedback_stable_since_ms) >= 100U &&
         (s_startup_position_captured || capture_startup_position());
 

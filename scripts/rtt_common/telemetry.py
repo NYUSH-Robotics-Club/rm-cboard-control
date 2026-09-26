@@ -8,8 +8,8 @@ from typing import Dict, List
 
 MAGIC = 0x4452
 MAGIC_ALT = 0x5244
-CURRENT_VERSION = 10
-SUPPORTED_VERSIONS = (3, 4, 5, 6, 7, 8, 9, 10)
+CURRENT_VERSION = 11
+SUPPORTED_VERSIONS = (3, 4, 5, 6, 7, 8, 9, 10, 11)
 
 HEADER_STRUCT = struct.Struct("<HBBI")
 PAYLOAD_STRUCT_V3 = struct.Struct("<Iff4f4f3f3f11f10B8h2BH8BII7fBHBB15fH")
@@ -25,6 +25,18 @@ V9_DIAGNOSTICS = struct.Struct("<9Iif2I2fI3i9f")
 PAYLOAD_STRUCT_V9 = struct.Struct(PAYLOAD_STRUCT_V8.format + V9_DIAGNOSTICS.format[1:])
 # v10 appends four speed-PID outputs and four current feedback values.
 PAYLOAD_STRUCT_V10 = struct.Struct(PAYLOAD_STRUCT_V9.format + "8f")
+# v11 appends pitch command, feedback and both PID-loop diagnostics to v10.
+PITCH_DIAGNOSTICS = struct.Struct("<6I21f")
+PAYLOAD_STRUCT_V11 = struct.Struct(PAYLOAD_STRUCT_V10.format + PITCH_DIAGNOSTICS.format[1:])
+PITCH_DIAGNOSTIC_FIELDS = (
+    "pitch_diag_valid", "pitch_feedback_ms", "pitch_command_unit", "pitch_command_status",
+    "pitch_command_raw", "pitch_current_actual_raw", "pitch_speed_target_rpm", "pitch_speed_actual_rpm",
+    "pitch_outer_pout", "pitch_outer_iout", "pitch_outer_dout", "pitch_outer_output",
+    "pitch_inner_pout", "pitch_inner_iout", "pitch_inner_dout", "pitch_inner_output",
+    "pitch_outer_kp", "pitch_outer_ki", "pitch_outer_kd", "pitch_outer_output_max", "pitch_outer_integral_max",
+    "pitch_inner_kp", "pitch_inner_ki", "pitch_inner_kd", "pitch_inner_output_max", "pitch_inner_integral_max",
+    "pitch_pid_dt_s",
+)
 YAW_DIAGNOSTIC_FIELDS = (
     "yaw_diag_valid",
     "yaw_sample_ms",
@@ -65,6 +77,7 @@ PAYLOAD_STRUCTS: Dict[int, struct.Struct] = {
     8: PAYLOAD_STRUCT_V8,
     9: PAYLOAD_STRUCT_V9,
     10: PAYLOAD_STRUCT_V10,
+    11: PAYLOAD_STRUCT_V11,
 }
 PAYLOAD_SIZES = {version: payload_struct.size for version, payload_struct in PAYLOAD_STRUCTS.items()}
 PAYLOAD_SIZE = PAYLOAD_SIZES[CURRENT_VERSION]
@@ -239,6 +252,33 @@ class TelemetryFrame:
     yaw_pid_kd: int | float = float("nan")
     yaw_pid_output_max: int | float = float("nan")
     yaw_pid_integral_max: int | float = float("nan")
+    pitch_diag_valid: int | float = 0
+    pitch_feedback_ms: int | float = float("nan")
+    pitch_command_unit: int | float = float("nan")
+    pitch_command_status: int | float = float("nan")
+    pitch_command_raw: int | float = float("nan")
+    pitch_current_actual_raw: int | float = float("nan")
+    pitch_speed_target_rpm: int | float = float("nan")
+    pitch_speed_actual_rpm: int | float = float("nan")
+    pitch_outer_pout: int | float = float("nan")
+    pitch_outer_iout: int | float = float("nan")
+    pitch_outer_dout: int | float = float("nan")
+    pitch_outer_output: int | float = float("nan")
+    pitch_inner_pout: int | float = float("nan")
+    pitch_inner_iout: int | float = float("nan")
+    pitch_inner_dout: int | float = float("nan")
+    pitch_inner_output: int | float = float("nan")
+    pitch_outer_kp: int | float = float("nan")
+    pitch_outer_ki: int | float = float("nan")
+    pitch_outer_kd: int | float = float("nan")
+    pitch_outer_output_max: int | float = float("nan")
+    pitch_outer_integral_max: int | float = float("nan")
+    pitch_inner_kp: int | float = float("nan")
+    pitch_inner_ki: int | float = float("nan")
+    pitch_inner_kd: int | float = float("nan")
+    pitch_inner_output_max: int | float = float("nan")
+    pitch_inner_integral_max: int | float = float("nan")
+    pitch_pid_dt_s: int | float = float("nan")
 
 
 
@@ -1389,6 +1429,13 @@ class FrameParser:
                     values = struct.unpack_from("<8f", raw, HEADER_STRUCT.size + PAYLOAD_STRUCT_V9.size)
                     frame.chassis_pid_output = list(values[:4])
                     frame.chassis_current_actual_raw = list(values[4:])
+                if version >= 11:
+                    values = list(PITCH_DIAGNOSTICS.unpack_from(
+                        raw, HEADER_STRUCT.size + PAYLOAD_STRUCT_V10.size))
+                    for index in (3, 4, 5):
+                        values[index] = struct.unpack("<i", struct.pack("<I", values[index]))[0]
+                    for name, value in zip(PITCH_DIAGNOSTIC_FIELDS, values):
+                        setattr(frame, name, value)
                 frames.append(frame)
             elif version == 7:
                 frames.append(self._parse_v7(raw, version, seq, host_rx_ms))

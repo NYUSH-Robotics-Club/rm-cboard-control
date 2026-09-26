@@ -1,4 +1,4 @@
-/* 将应用诊断打包为RTT遥测。版本10保留版本9前缀，并附带底盘速度环诊断。
+/* 将应用诊断打包为RTT遥测。版本11保留版本10前缀，并附带pitch PID诊断。
  * 浮点NaN表示未接入、过期或未启用的测量/目标，不能画成零值。只观察，不改变控制。
  */
 #ifndef RM_DASHBOARD_H
@@ -9,7 +9,7 @@
 #define DASHBOARD_RTT_CHANNEL 1U
 #define DASHBOARD_RTT_BUFFER_SIZE 2048U
 #define DASHBOARD_FRAME_MAGIC 0x4452U
-#define DASHBOARD_FRAME_VERSION 10U
+#define DASHBOARD_FRAME_VERSION 11U
 
 enum {
   DASHBOARD_CAN = 1U,      /* CAN位表示该总线有配置电机在100ms内反馈，不代表总线无错误。 */
@@ -68,6 +68,15 @@ typedef struct {
    * pid_output是速度PID最终输出的原始电流刻度；current_actual_raw是电调反馈原始刻度。
    * 无新鲜反馈或控制未运行时发布NaN，避免把停机零值当成有效调节数据。 */
   float chassis_pid_output[4], chassis_current_actual_raw[4];
+  /* v11 pitch诊断：原始命令/电流是协议刻度，不是安培或伏特；NaN表示无效。 */
+  uint32_t pitch_diag_valid, pitch_feedback_ms, pitch_command_unit;
+  int32_t pitch_command_status, pitch_command_raw, pitch_current_actual_raw;
+  float pitch_speed_target_rpm, pitch_speed_actual_rpm;
+  float pitch_outer_pout, pitch_outer_iout, pitch_outer_dout, pitch_outer_output;
+  float pitch_inner_pout, pitch_inner_iout, pitch_inner_dout, pitch_inner_output;
+  float pitch_outer_kp, pitch_outer_ki, pitch_outer_kd, pitch_outer_output_max, pitch_outer_integral_max;
+  float pitch_inner_kp, pitch_inner_ki, pitch_inner_kd, pitch_inner_output_max, pitch_inner_integral_max;
+  float pitch_pid_dt_s;
 } DashboardPayload;
 typedef struct { uint16_t magic; uint8_t version, payload_len; uint32_t seq; DashboardPayload payload; uint16_t crc16; } DashboardFrame;
 #pragma pack(pop)

@@ -8,6 +8,7 @@
 #include "remote_messages.h"
 #include "control_messages.h"
 #include "motor_service.h"
+#include "motor_driver.h"
 #include "robot_config.h"
 #include "SEGGER_RTT.h"
 #include <assert.h>
@@ -23,6 +24,7 @@ static DashboardFrame captured;
 static ChassisController chassis = {.target_speeds = {100, -200, 300, -400}, .running = true,
     .speed_pids = {{.output = 101}, {.output = -202}, {.output = 303}, {.output = -404}},
     .motor_feedbacks = {{.current = 11}, {.current = -22}, {.current = 33}, {.current = -44}}};
+static MotorContext_t pitch_context;
 static const MotorConfig_t motors[] = {
     {.motor_id = 2, .can_channel = CAN_CHANNEL_1},
     {.motor_id = 1, .can_channel = CAN_CHANNEL_1},
@@ -46,6 +48,11 @@ const ChassisController *ChassisApp_GetController(void) { return &chassis; }
 uint8_t ChassisApp_GetMotorIds(uint8_t ids[4]) {
     const uint8_t order[] = {2, 1, 4, 3}; memcpy(ids, order, sizeof(order)); return 4;
 }
+uint8_t MotorService_FindByRole(MotorRole_e role, uint8_t *ids, uint8_t max_count) {
+    if (role == MOTOR_ROLE_GIMBAL_PITCH && ids && max_count > 0U) { ids[0] = 8; return 1; }
+    return 0;
+}
+MotorContext_t *MotorDriver_GetContext(uint8_t id) { return id == 8U ? &pitch_context : NULL; }
 void SEGGER_RTT_Init(void) {}
 int SEGGER_RTT_ConfigUpBuffer(unsigned index, const char *name, void *buffer, unsigned size, unsigned flags) {
     (void)name; (void)buffer; (void)flags;
@@ -58,6 +65,14 @@ unsigned SEGGER_RTT_Write(unsigned index, const void *data, unsigned size) {
 }
 static void emit(void) { assert(fwrite(&captured, sizeof(captured), 1, stdout) == 1); }
 int main(void) {
+    pitch_context.initialized = true;
+    pitch_context.config = &motors[0];
+    pitch_context.speed_rpm = -2;
+    pitch_context.pid_outer = (PID_Controller){.Kp = 0.5f, .Ki = 0.1f, .Kd = 1.1f,
+        .output_max = 950, .integral_max = 100, .pout = 12, .iout = 3, .dout = -2, .output = 13};
+    pitch_context.pid_inner = (PID_Controller){.Kp = 12, .Ki = 0, .Kd = 0,
+        .output_max = 26000, .integral_max = 1800, .target = -3, .actual = -2,
+        .pout = -12, .output = -12, .dt = 0.004f};
     MsgEvent events[16]; MsgCenter_Init(events, 16); Dashboard_Init();
     RemoteControlMessage rc = {.rc = {.ch = {111, -222, 333, -444, 555}, .s = {2, 3}}};
     SensorData imu = {.yaw_total_angle = 720, .pitch = 10, .roll = -20, .g_gz = 1};
@@ -83,7 +98,7 @@ int main(void) {
         .pitch = {.flags = 31, .position_actual_ticks = 2048, .position_target_ticks = 1024,
             .speed_actual_rpm = -2, .speed_target_rpm = -3, .encoder_raw = 2048}};
     Dashboard_Step();
-    assert(captured.version == 10 && captured.payload_len == (444 & 255));
+    assert(captured.version == 11 && captured.payload_len == (552 & 255));
     assert(captured.payload.yaw_diag_valid == 1 && captured.payload.yaw_rc_ch0 == -660);
     assert(captured.payload.yaw_rc_sequence == 17 && captured.payload.yaw_route_sequence == 122);
     assert(captured.payload.yaw_command_raw == 321 && captured.payload.yaw_current_actual_raw == -1234);
@@ -101,6 +116,7 @@ int main(void) {
     assert(captured.payload.motor_rpm[0] == 20 && captured.payload.motor_target_rpm[1] == -200);
     assert(captured.payload.chassis_pid_output[0] == 101 && captured.payload.chassis_pid_output[3] == -404);
     assert(captured.payload.chassis_current_actual_raw[0] == 200 && captured.payload.chassis_current_actual_raw[3] == 300);
+    assert(captured.payload.pitch_diag_valid == 1 && captured.payload.pitch_inner_pout == -12);
     assert(isnan(captured.payload.chassis_power)); emit();
     now += 201; Dashboard_Step();
     assert(captured.payload.link_bitmap_packed == 0 && captured.payload.status_flags == 0);

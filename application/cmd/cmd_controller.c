@@ -29,6 +29,12 @@ _Static_assert(sizeof(GimbalCmd) <= MC_MAX_PAYLOAD, "gimbal command exceeds mess
 
 #define REMOTE_LOSS_TIMEOUT_MS (200U)
 
+static float normalize_angle_180(float angle_deg) {
+    while (angle_deg > 180.0f) angle_deg -= 360.0f;
+    while (angle_deg < -180.0f) angle_deg += 360.0f;
+    return angle_deg;
+}
+
 static void update_yaw_heading(void) {
     const RobotConfig_t *robot = RobotConfig_Get();
     const ChassisFollowConfig *follow = robot ? robot->chassis_follow : NULL;
@@ -175,7 +181,10 @@ void CmdController_Task(uint32_t current_tick) {
 
     float yaw_error_deg =
         s_output.spin_hold_yaw_deg - s_input.sensor.yaw_total_angle;
-    LOG_CSV(LOG_TAG_CMD, "%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%.3f",
+    float yaw_world = normalize_angle_180(s_input.sensor.yaw_total_angle);
+    float chassis_world = normalize_angle_180(s_input.sensor.c_yaw);
+    float yaw_to_chassis = normalize_angle_180(yaw_world - chassis_world);
+    LOG_CSV(LOG_TAG_CMD, "%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%.3f",
             (unsigned int)(s_output.spin_mode ? 1U : 0U),
             (unsigned int)((uint8_t)s_input.remote.rc.s[0]),
             (unsigned int)((uint8_t)s_input.remote.rc.s[1]),
@@ -183,6 +192,9 @@ void CmdController_Task(uint32_t current_tick) {
             s_input.sensor.yaw_total_angle,
             s_output.spin_hold_yaw_deg,
             yaw_error_deg,
+            yaw_world,
+            chassis_world,
+            yaw_to_chassis,
             s_output.gimbal.yaw_rate,
             s_output.chassis.vx,
             s_output.chassis.vy,

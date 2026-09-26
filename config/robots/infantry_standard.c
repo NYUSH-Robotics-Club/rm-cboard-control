@@ -26,10 +26,10 @@ static const ChassisFollowConfig s_chassis_follow = {
 /* 手动输入按度/秒积分；普通推杆与回中共用限速。 */
 static const YawControlConfig s_yaw_control = {
     .manual_rate_deg_s = 300.0f,
-    .target_lead_deg = 15.0f,
+    .target_lead_deg = 12.0f,
     .manual_speed_rpm = 60.0f,
     .vision_speed_rpm = 10.0f,
-    .spin_speed_rpm = 10.0f,
+    .spin_speed_rpm = 15.0f,
     .speed_loop_only = false /* 步兵暂时旁路位置环；哨兵保留串级。 */
 };
 
@@ -183,9 +183,9 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
             },
         .protocol.dji = {GM6020_COMMAND_CURRENT, 12000}, // 电流原始刻度，5460 约为 1 A。
         // 位置环参数保留；speed_loop_only=true时不执行，恢复后输出仍受模式限速。
-        .pid_outer = {0.075f, 0.0f, 0.0f, 2200.0f, 100.0f},
+        .pid_outer = {0.065f, 0.0f, 0.0f, 2200.0f, 100.0f},
         // 速度误差为RPM、输出为电流原始刻度；保留当前用户PID，反馈失联仍归零。
-        .pid_inner = {300.0f, 108.0f, 0.0f, 26000.0f, 4000.0f}
+        .pid_inner = {300.0f, 105.0f, 0.0f, 26000.0f, 4000.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。
@@ -203,16 +203,17 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .direction = -1, // Pitch direction correction
         .limits.gm6020 =
             {
-                .angle_min = 1566.0f, // 实测最高位置；抬头时编码减小。
-                .angle_max = 2205.0f, // 实测最低位置。
+                .angle_min = 1607.0f, // 实测最高位置；抬头时编码减小。
+                .angle_max = 2374.0f, // 实测最低位置。
                 .gravity_compensation =
                     0.0f,             // Gravity compensation for pitch
                 .initial_angle = 1971.0f, // 用户确认的初始位置，等待真实反馈后再闭环。
                 .gravity_zero_angle = 1971.0f, // 用户标定的重力机械零点，单位为编码器刻度。
                 .enable_yaw_pitch_compensation = false // 关闭yaw对pitch目标的耦合改写。
             },
-        .pid_outer = {22.0f, 0.0f, 1.1f, 950.0f, 100.0f}, // Reference infantry pitch angle PID
-        .pid_inner = {0.0f, 0.0f, 0.0f, 26000.0f, 1800.0f}
+        // Conservative pitch startup values; raise one gain at a time after a guarded test.
+        .pid_outer = {1.1f, 0.0f, 0.0f, 3000.0f, 0.0f},
+        .pid_inner = {60.0f, 0.0f, 0.0f, 5000.0f, 2000.0f}
     }};
 
 /* 用户确认：X形±45°，前后/左右轮中心距均0.54m，轮半径0.07m，M3508 P19。

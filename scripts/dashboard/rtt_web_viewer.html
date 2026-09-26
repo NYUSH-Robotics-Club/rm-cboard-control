@@ -411,6 +411,7 @@
         8: 300,
         9: 412,
         10: 444,
+        11: 552,
       };
 
       // Match firmware modules/algorithm/crc16.c (table starts with 0x0000, 0x1189, ...)
@@ -1224,6 +1225,11 @@
                 offset += 4;
                 return value;
               };
+              const readI32 = () => {
+                const value = dv.getInt32(offset, true);
+                offset += 4;
+                return value;
+              };
               const readF32 = () => {
                 const value = dv.getFloat32(offset, true);
                 offset += 4;
@@ -1585,7 +1591,6 @@
 
               // v9 is one completed yaw callback, including its consumed RC source.
               if (version >= 9) {
-                const readI32 = () => { const value = dv.getInt32(offset, true); offset += 4; return value; };
                 latest.yaw_diag_valid = readU32();
                 latest.yaw_sample_ms = readU32();
                 latest.yaw_callback_count = readU32();
@@ -1619,6 +1624,36 @@
               if (version >= 10) {
                 latest.chassis_pid_output = readF32Array(4);
                 latest.chassis_current_actual_raw = readF32Array(4);
+              }
+
+              if (version >= 11) {
+                latest.pitch_diag_valid = readU32();
+                latest.pitch_feedback_ms = readU32();
+                latest.pitch_command_unit = readU32();
+                latest.pitch_command_status = readI32();
+                latest.pitch_command_raw = readI32();
+                latest.pitch_current_actual_raw = readI32();
+                latest.pitch_speed_target_rpm = readF32();
+                latest.pitch_speed_actual_rpm = readF32();
+                latest.pitch_outer_pout = readF32();
+                latest.pitch_outer_iout = readF32();
+                latest.pitch_outer_dout = readF32();
+                latest.pitch_outer_output = readF32();
+                latest.pitch_inner_pout = readF32();
+                latest.pitch_inner_iout = readF32();
+                latest.pitch_inner_dout = readF32();
+                latest.pitch_inner_output = readF32();
+                latest.pitch_outer_kp = readF32();
+                latest.pitch_outer_ki = readF32();
+                latest.pitch_outer_kd = readF32();
+                latest.pitch_outer_output_max = readF32();
+                latest.pitch_outer_integral_max = readF32();
+                latest.pitch_inner_kp = readF32();
+                latest.pitch_inner_ki = readF32();
+                latest.pitch_inner_kd = readF32();
+                latest.pitch_inner_output_max = readF32();
+                latest.pitch_inner_integral_max = readF32();
+                latest.pitch_pid_dt_s = readF32();
               }
 
               if ((store.lastSeq !== null && seq < store.lastSeq) ||
@@ -1870,6 +1905,32 @@
               { name: "shoot_loader_speed_aps", value: fmtMaybe(latest.shoot_loader_speed_aps, 3) },
               { name: "shoot_friction_l_speed_aps", value: fmtMaybe(latest.shoot_friction_l_speed_aps, 3) },
               { name: "shoot_friction_r_speed_aps", value: fmtMaybe(latest.shoot_friction_r_speed_aps, 3) },
+            ]
+          : [];
+
+        const pitchItems = latest
+          ? [
+              { name: "pitch_diag_valid", value: latest.pitch_diag_valid ? "VALID" : "N/A" },
+              { name: "pitch_feedback_ms", value: latest.pitch_feedback_ms },
+              { name: "pitch_command_unit", value: latest.pitch_command_unit },
+              { name: "pitch_command_status", value: latest.pitch_command_status },
+              { name: "pitch_command_raw", value: latest.pitch_command_raw },
+              { name: "pitch_current_actual_raw", value: latest.pitch_current_actual_raw },
+              { name: "pitch_speed_target_rpm", value: fmtMaybe(latest.pitch_speed_target_rpm, 3) },
+              { name: "pitch_speed_actual_rpm", value: fmtMaybe(latest.pitch_speed_actual_rpm, 3) },
+              { name: "pitch_outer_pout", value: fmtMaybe(latest.pitch_outer_pout, 3) },
+              { name: "pitch_outer_iout", value: fmtMaybe(latest.pitch_outer_iout, 3) },
+              { name: "pitch_outer_dout", value: fmtMaybe(latest.pitch_outer_dout, 3) },
+              { name: "pitch_outer_output", value: fmtMaybe(latest.pitch_outer_output, 3) },
+              { name: "pitch_inner_pout", value: fmtMaybe(latest.pitch_inner_pout, 3) },
+              { name: "pitch_inner_iout", value: fmtMaybe(latest.pitch_inner_iout, 3) },
+              { name: "pitch_inner_dout", value: fmtMaybe(latest.pitch_inner_dout, 3) },
+              { name: "pitch_inner_output", value: fmtMaybe(latest.pitch_inner_output, 3) },
+              { name: "pitch_outer_gains", value: `${fmtMaybe(latest.pitch_outer_kp)} / ${fmtMaybe(latest.pitch_outer_ki)} / ${fmtMaybe(latest.pitch_outer_kd)}` },
+              { name: "pitch_outer_limits", value: `${fmtMaybe(latest.pitch_outer_output_max)} / ${fmtMaybe(latest.pitch_outer_integral_max)}` },
+              { name: "pitch_inner_gains", value: `${fmtMaybe(latest.pitch_inner_kp)} / ${fmtMaybe(latest.pitch_inner_ki)} / ${fmtMaybe(latest.pitch_inner_kd)}` },
+              { name: "pitch_inner_limits", value: `${fmtMaybe(latest.pitch_inner_output_max)} / ${fmtMaybe(latest.pitch_inner_integral_max)}` },
+              { name: "pitch_pid_dt_s", value: fmtMaybe(latest.pitch_pid_dt_s, 6) },
             ]
           : [];
 
@@ -2252,6 +2313,7 @@
                 <GroupPanel title="Motor" items={motorItems} />
                 <GroupPanel title="Remote & Status" items={remoteItems} />
                 <GroupPanel title="IMU & Control" items={imuItems} />
+                <GroupPanel title="Pitch PID Diagnostics" items={pitchItems} />
                 <GroupPanel title="Referee" items={refereeItems} />
                 <GroupPanel title="VisionToGimbal (SP)" items={visionRecvProtoItems} />
                 <GroupPanel title="GimbalToVision (SP)" items={visionSendProtoItems} />

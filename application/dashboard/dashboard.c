@@ -10,6 +10,7 @@
 #include "control_messages.h"
 #include "sensor_messages.h"
 #include "motor_service.h"
+#include "motor_driver.h"
 #include "robot_config.h"
 #include "bsp_time.h"
 #include "SEGGER_RTT.h"
@@ -18,8 +19,8 @@
 #include <stdatomic.h>
 #include <string.h>
 
-_Static_assert(sizeof(DashboardPayload) == 444U, "dashboard v10 payload ABI");
-_Static_assert(sizeof(DashboardFrame) == 454U, "dashboard v10 frame ABI");
+_Static_assert(sizeof(DashboardPayload) == 552U, "dashboard v11 payload ABI");
+_Static_assert(sizeof(DashboardFrame) == 562U, "dashboard v11 frame ABI");
 _Static_assert(offsetof(DashboardPayload, yaw_diag_valid) == 300U, "preserve v8 prefix");
 
 static uint8_t s_initialized;
@@ -207,6 +208,13 @@ void Dashboard_Step(void) {
     .yaw_pid_pout = NAN, .yaw_pid_iout = NAN, .yaw_pid_dout = NAN, .yaw_pid_output = NAN,
     .yaw_pid_kp = NAN, .yaw_pid_ki = NAN, .yaw_pid_kd = NAN,
     .yaw_pid_output_max = NAN, .yaw_pid_integral_max = NAN,
+    .pitch_speed_target_rpm = NAN, .pitch_speed_actual_rpm = NAN,
+    .pitch_outer_pout = NAN, .pitch_outer_iout = NAN, .pitch_outer_dout = NAN, .pitch_outer_output = NAN,
+    .pitch_inner_pout = NAN, .pitch_inner_iout = NAN, .pitch_inner_dout = NAN, .pitch_inner_output = NAN,
+    .pitch_outer_kp = NAN, .pitch_outer_ki = NAN, .pitch_outer_kd = NAN,
+    .pitch_outer_output_max = NAN, .pitch_outer_integral_max = NAN,
+    .pitch_inner_kp = NAN, .pitch_inner_ki = NAN, .pitch_inner_kd = NAN,
+    .pitch_inner_output_max = NAN, .pitch_inner_integral_max = NAN, .pitch_pid_dt_s = NAN,
   };
   DashboardPayload *p = &frame.payload;
   const uint32_t now = BspTime_NowMs();
@@ -251,6 +259,43 @@ void Dashboard_Step(void) {
     }
     if (monitor.pitch.flags & GIMBAL_MONITOR_CONTROL_ACTIVE)
       p->gimbal_pitch_target_deg_s = monitor.pitch.speed_target_rpm * 6.0f;
+    /* 直接读取pitch上下文的两级PID，保留原始命令和反馈单位供负载判别。 */
+    uint8_t pitch_ids[1] = {0U};
+    if (MotorService_FindByRole(MOTOR_ROLE_GIMBAL_PITCH, pitch_ids, 1U) > 0U) {
+      MotorContext_t *pitch = MotorDriver_GetContext(pitch_ids[0]);
+      if (pitch && pitch->initialized && pitch->config) {
+        p->pitch_diag_valid = 1U;
+        p->pitch_feedback_ms = monitor.pitch.feedback_ms;
+        p->pitch_command_unit = monitor.pitch.command_unit;
+        p->pitch_command_status = monitor.pitch.command_status;
+        p->pitch_command_raw = monitor.pitch.command_raw;
+        p->pitch_current_actual_raw = monitor.pitch.current_actual_raw;
+        p->pitch_outer_kp = pitch->pid_outer.Kp;
+        p->pitch_outer_ki = pitch->pid_outer.Ki;
+        p->pitch_outer_kd = pitch->pid_outer.Kd;
+        p->pitch_outer_output_max = pitch->pid_outer.output_max;
+        p->pitch_outer_integral_max = pitch->pid_outer.integral_max;
+        p->pitch_inner_kp = pitch->pid_inner.Kp;
+        p->pitch_inner_ki = pitch->pid_inner.Ki;
+        p->pitch_inner_kd = pitch->pid_inner.Kd;
+        p->pitch_inner_output_max = pitch->pid_inner.output_max;
+        p->pitch_inner_integral_max = pitch->pid_inner.integral_max;
+        if (monitor.pitch.flags & GIMBAL_MONITOR_FEEDBACK_FRESH)
+          p->pitch_speed_actual_rpm = (float)pitch->speed_rpm;
+        if (monitor.pitch.flags & GIMBAL_MONITOR_CONTROL_ACTIVE) {
+          p->pitch_speed_target_rpm = pitch->pid_inner.target;
+          p->pitch_outer_pout = pitch->pid_outer.pout;
+          p->pitch_outer_iout = pitch->pid_outer.iout;
+          p->pitch_outer_dout = pitch->pid_outer.dout;
+          p->pitch_outer_output = pitch->pid_outer.output;
+          p->pitch_inner_pout = pitch->pid_inner.pout;
+          p->pitch_inner_iout = pitch->pid_inner.iout;
+          p->pitch_inner_dout = pitch->pid_inner.dout;
+          p->pitch_inner_output = pitch->pid_inner.output;
+          p->pitch_pid_dt_s = pitch->pid_inner.dt;
+        }
+      }
+    }
     /* 来源随命令走，不能使用fill_sources中的最新RC替代本次PID实际用到的输入。 */
     p->yaw_diag_valid = 1U;
     p->yaw_sample_ms = monitor.tick_ms;
