@@ -53,7 +53,7 @@ static RobotStatus omni_compute(const ChassisKinematicsInput *input,
     if (magnitude > 1.0f) { vx /= magnitude; vy /= magnitude; }
     vx *= geometry->max_translation_mps;
     vy *= geometry->max_translation_mps;
-    float wz = fmaxf(-1.0f, fminf(1.0f, input->wz)) * geometry->max_rotation_radps;
+    float wz = fmaxf(-5.0f, fminf(5.0f, input->wz)) * geometry->max_rotation_radps;
 
     float rows[OMNI_WHEEL_COUNT][3];
     float speeds[OMNI_WHEEL_COUNT];
