@@ -95,6 +95,45 @@
   重启造成抖动。建议先内Kp20、内限幅3000，外Kp0.2、外限幅30RPM，并把越界改为锁存后
   再做单方向测试；不要只降低向下参数或继续提高限幅。
 
+- 09-26 小陀螺逻辑复核：车体自转归`application/cmd/command_router.c`的`SPIN_WZ_NORM`
+  （当前0.33，归一化底盘角速度），不是`spin_speed_rpm`；后者在
+  `config/robots/infantry_standard.c`当前15RPM，只限制yaw电机头部保持环的速度。进入小陀螺
+  时路由器保存一次`spin_hold_yaw_deg=sensor.yaw_total_angle`，随后gimbal控制器以
+  `yaw_target_memo-sensor.yaw_total_angle`闭合头部世界航向，反馈使用陀螺`g_gz`，速度目标
+  受`spin_speed_rpm`限制。小陀螺行进时，路由器用`yaw_total_angle-c_yaw`把左摇杆平移向量
+  从云台/世界方向变换到底盘坐标，并固定发布`SPIN_WZ_NORM`旋转；`SPIN_GIMBAL_YAW_ADJ_DEG_PER_S`
+  （当前120）只决定小陀螺中yaw杆改变头部保持目标的速度。
+
+- 09-26 复核到`SPIN_WZ_NORM`即使改为3倍/10倍也无差异：
+  `adapters/chassis/omni_chassis_strategy.c`先将输入`wz`硬裁剪到[-1,1]，随后乘
+  `max_rotation_radps=1.20`；底盘还按共享`CHASSIS_DEMO_TARGET_SPEED=8050RPM`对四轮整体降额。
+  因此当前源码`SPIN_WZ_NORM=10.0`实际等价于1.0，车体角速度上限约1.2rad/s，且必须重新
+  构建/烧录才会生效。若需继续提高，应先改底盘`max_rotation_radps`并确认轮速/电流余量，不能
+  只放大归一化命令。
+
+- 09-26 用户指出小陀螺行进仍不能参考世界坐标。当前spin分支使用
+  `yaw_total_angle-c_yaw`，其含义是“云台方向相对底盘”，适合让平移跟随云台，不是世界
+  坐标系的场地固定速度；底盘平移也没有使用`g_gz`做旋转速度修正。若目标是世界坐标，建议
+  将左摇杆先定义为世界速度向量，再只用底盘`c_yaw`做世界到车体的逆旋转；为补偿传感器/路由
+  延迟，可用`theta_pred=c_yaw+omega_z*tau`（`omega_z`来自底盘陀螺，`tau`先取实测链路延迟）
+  作为变换角。必须先验证`c_yaw`方向、单位和时间戳；若目标是云台相对方向，则保留现有
+  `yaw_total_angle-c_yaw`，不能两种定义混用。建议新增日志记录`c_yaw`、`yaw_total_angle`、
+  `g_gz`、预测角和底盘vx/vy及四轮目标，先做固定世界方向前进与原地旋转对照。
+
+- 09-26 无底盘IMU时的边界：yaw电机速度只表示云台相对底盘的角速度，单独积分无法长期
+  保持世界航向，会受初始标定、反馈延迟、机械间隙和漂移影响。若`yaw_total_angle`确实是
+  云台IMU世界航向，可估算`theta_chassis = yaw_total_angle - yaw_relative_encoder + bias`，
+  并用`omega_chassis = gyro_gz - d(yaw_relative_encoder)/dt`或小陀螺头部锁定时的
+  `-d(yaw_relative_encoder)/dt`做短期预测；再以绝对角低频校正积分角。若没有可靠的云台
+  世界航向，电机转速只能得到相对/短时方向，不能宣称是真正世界坐标。建议先记录两种角度、
+  编码器RPM、`g_gz`和时间戳验证符号及漂移，再决定融合权重。
+
+- 09-26 用户提供的参考仓库URL当前返回404，未能核对其实际源码。若采用常见小陀螺做法，
+  可在“云台头部保持世界方向”成立时，用yaw编码器相对正前方角直接把遥控平移向量旋转到
+  车体坐标；这等价于用`yaw_relative_encoder`替代缺失的`c_yaw`，不能在头部未锁定或
+  `yaw_total_angle`不可靠时宣称世界坐标。速度修正应只用于预测角（编码器RPM换算角速度
+  后乘实测延迟），并保留低频绝对角校正，避免单纯积分漂移。
+
 - 09-26 烧录时出现`STLink error (9): Get IDCODE error`。主机`just doctor`能看到ST-Link
   序列号`0669FF535548877187254949`并通过OpenOCD配置检查，但未连接MCU；该错误仍停在
   SWD IDCODE读取，尚无新固件写入证据。项目flash默认走OpenOCD，pyOCD只用于RTT连接；

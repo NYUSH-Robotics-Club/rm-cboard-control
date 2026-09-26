@@ -95,11 +95,32 @@
   目标对齐当前位置并复位PID，反向杆量仍可脱离端点。未改变GimbalCmd布局。步兵构建通过，
   ELF SHA256 `cc96485a583b58468ca204623d09ed3c9b7ab12458e92bdd1afdad907e20435e`，尚未烧录。
 
+- 09-26 小陀螺参数与链路确认：车体自转速度由`application/cmd/command_router.c`的
+  `SPIN_WZ_NORM=0.33`控制；`spin_speed_rpm=15`只限制yaw电机头部保持环，
+  `SPIN_GIMBAL_YAW_ADJ_DEG_PER_S=120`控制小陀螺中yaw杆改变头部保持目标的速度。进入小陀螺
+  时保存一次底盘IMU世界航向，头部保持环以该目标与`yaw_total_angle`误差闭合；平移则用
+  `yaw_total_angle-c_yaw`将左摇杆向量变换到底盘坐标，同时固定发布车体旋转命令。
+
 - 09-26 最新 `monitor/logger_20260926_224055_137979.txt` 显示向上方向更易抖动：I/D均为0，
   正命令中位约+5873、实际电流约+4960并触+9000；负命令中位约-4629、电流约-2263。
   正向目标速度最高约+426RPM，负向约-264RPM，且flags7/31反复切换。应归因于Kp70/外Kp1.1
   与方向性负载共同造成正向饱和和越界自动重启，不是I/D残留。下一步候选内Kp20/限幅3000、
   外Kp0.2/限幅30RPM，并先把越界保护改为锁存。
+
+- 09-26 复核小陀螺自转上限：`omni_chassis_strategy.c`把`wz`裁剪到[-1,1]，再乘底盘
+  `max_rotation_radps=1.20`；四轮还共享`CHASSIS_DEMO_TARGET_SPEED=8050RPM`整体降额。因此
+  `SPIN_WZ_NORM`改为3倍/10倍没有区别，当前源码10.0实际只等价于1.0；改参数还需重新构建
+  烧录。继续提速必须先改`max_rotation_radps`并检查轮速/电流余量。
+
+- 09-26 小陀螺世界坐标行进建议：当前spin分支用`yaw_total_angle-c_yaw`，实际是云台相对
+  底盘方向变换，不是场地固定世界速度；`g_gz`未参与底盘平移修正。若需世界坐标行进，应以
+  底盘`c_yaw`将世界速度向量逆旋转到车体坐标，并可用`theta_pred=c_yaw+omega_z*tau`补偿
+  路由/传感器延迟。先核对`c_yaw`时间戳和正负方向，再通过日志验证预测角、vx/vy和四轮目标。
+
+- 09-26 无底盘IMU时不能只靠yaw电机速度获得长期世界坐标；它只测云台相对底盘角速度，
+  积分会漂移。若云台`yaw_total_angle`是可靠世界航向，可用`theta_chassis = yaw_total_angle -
+  yaw_relative_encoder + bias`得到底盘航向，再用编码器速度与`g_gz`组成短期预测并用绝对角低频校正。
+  若云台没有可靠世界参考，只能提供相对/短时方向，不能宣称绝对世界坐标。
 
 - 09-26 烧录/调试报告 `STLink error (9): Get IDCODE error`。`just doctor` 可枚举 ST-Link
   序列号`0669FF535548877187254949`并通过OpenOCD配置检查，但doctor不连接目标；因此当前
