@@ -272,7 +272,6 @@ static void test_gimbal_feedforward(MotorConfig_t *yaw_config, YawControlConfig 
  MotorContext_t *yaw = &motors[5], *pitch = &motors[8];
  const MotorConfig_t *original_pitch = pitch->config;
  MotorConfig_t pitch_config = *original_pitch;
- assert(yaw_config->feedforward.output_max == 0 && pitch_config.feedforward.output_max == 0);
  pitch->config = &pitch_config;
  pitch_config.limits.gm6020.gravity_compensation = 0;
  /* 前馈测试锁存实测位置，独立验证负数初始目标的兼容路径。 */
@@ -290,11 +289,13 @@ static void test_gimbal_feedforward(MotorConfig_t *yaw_config, YawControlConfig 
  gimbal_step(2200, true, true);
  assert(outputs[5] == 0 && outputs[8] == 0); /* Bias cannot bypass startup wait. */
  gimbal_step(2300, true, true);
- assert(outputs[5] == 3 && outputs[8] == -7); /* Explicit bias also exists at rest. */
+ assert(outputs[5] == 0 && outputs[8] == -7); /* Yaw standstill suppresses bias; pitch retains it. */
+ assert(yaw->pid_inner.last_time_us == now_ms * 1000U && yaw->pid_inner.dt == 0);
  GimbalCmd cmd = {.enabled = true, .yaw_rate = 1, .pitch_rate = -0.1f};
  PID_Reset(&pitch->pid_outer);
  feedforward_step(cmd);
  assert(yaw->pid_inner.target == 5 && outputs[5] == 53);
+ assert(fabsf(yaw->pid_inner.dt - 0.004f) < 0.000001f);
  assert(pitch->pid_inner.target == 6 && outputs[8] == 17); /* direction already in speed target */
  assert(yaw->pid_outer.output == 0); /* Feedforward does not re-enable outer loop. */
  cmd.yaw_rate = -1; cmd.pitch_rate = 0.1f;
@@ -353,12 +354,12 @@ static void test_gimbal_feedforward(MotorConfig_t *yaw_config, YawControlConfig 
  assert(outputs[5] == 0 && outputs[8] == 0);
  gimbal_step(now_ms + 4, true, true);
  gimbal_step(now_ms + 100, true, true);
- assert(outputs[5] == 12 && outputs[8] == -15);
+ assert(outputs[5] == 0 && outputs[8] == -15);
  gimbal_step(now_ms + 101, true, false);
  assert(outputs[5] == 0 && outputs[8] == 0);
  gimbal_step(now_ms + 4, true, true);
  gimbal_step(now_ms + 100, true, true);
- assert(outputs[5] == 12 && outputs[8] == -15);
+ assert(outputs[5] == 0 && outputs[8] == -15);
 
  /* Each invalid enabled term stops BOTH axes and clears their PID histories. */
  for (unsigned i = 0; i < 4; ++i) {
@@ -366,6 +367,10 @@ static void test_gimbal_feedforward(MotorConfig_t *yaw_config, YawControlConfig 
    if (i == 1) pitch_config.feedforward.output_max = -1;
    if (i == 2) pitch_config.feedforward.bias = INFINITY;
    if (i == 3) yaw_config->feedforward.velocity_gain = FLT_MAX;
+   if (i == 0) {
+     gimbal_step(now_ms + 4, true, true); /* Invalid yaw feedforward also stops pitch at rest. */
+     assert(outputs[5] == 0 && outputs[8] == 0);
+   }
    feedforward_step(cmd);
    assert(outputs[5] == 0 && outputs[8] == 0);
    assert(yaw->pid_inner.output == 0 && pitch->pid_inner.output == 0);
@@ -374,7 +379,7 @@ static void test_gimbal_feedforward(MotorConfig_t *yaw_config, YawControlConfig 
    gimbal_step(now_ms + 4, true, true);
    assert(outputs[5] == 0 && outputs[8] == 0);
    gimbal_step(now_ms + 100, true, true);
-   assert(outputs[5] == 12 && outputs[8] == -15);
+   assert(outputs[5] == 0 && outputs[8] == -15);
  }
  pitch->config = original_pitch;
  yaw_config->feedforward = (GimbalFeedforwardConfig){0};
@@ -385,27 +390,29 @@ static void test_pitch_coupling_switch(void) {
  const MotorConfig_t *original = pitch->config;
  MotorConfig_t config = *original;
  SensorData sensor = {0};
+ const float lower = config.limits.gm6020.angle_min;
+ const float upper = config.limits.gm6020.angle_max;
  pitch->config = &config;
  config.limits.gm6020.enable_yaw_pitch_compensation = false;
  pitch->angle_raw = 2048; /* 原tan模型的奇异点也不能影响关闭后的目标。 */
- pitch->angle_target = 1570;
+ pitch->angle_target = lower + 4;
  now_ms += 4;
  (void)GimbalController_PitchControl(8, 1, &sensor, false);
- assert(pitch->angle_target == 1566);
+ assert(pitch->angle_target == lower);
  yaw->angle_raw -= 4;
  now_ms += 4;
  (void)GimbalController_PitchControl(8, 0, &sensor, false);
- assert(pitch->angle_target == 1566);
+ assert(pitch->angle_target == lower);
 
  config.limits.gm6020.enable_yaw_pitch_compensation = true;
  pitch->angle_raw = 1628;
  now_ms += 4;
  (void)GimbalController_PitchControl(8, 0, &sensor, false);
- assert(pitch->angle_target == 1566); /* 开关恢复不能补算已跳过的yaw转角。 */
+ assert(pitch->angle_target == lower); /* 开关恢复不能补算已跳过的yaw转角。 */
  yaw->angle_raw -= 4;
  now_ms += 4;
  (void)GimbalController_PitchControl(8, 0, &sensor, false);
- assert(pitch->angle_target > 1566 && pitch->angle_target < 2205);
+ assert(pitch->angle_target > lower && pitch->angle_target < upper);
  float held = pitch->angle_target;
  yaw->angle_raw -= 4;
  now_ms += 4;
@@ -430,10 +437,9 @@ int main(void){
   PID_Init(&m->pid_outer,1,0,0,600,100);
   PID_Init(&m->pid_inner,1,0,0,25000,100);
  }
- /* 原有回归验证位置环路径；实际步兵配置仍默认为速度调试。 */
+ /* 固定位置环测试路径，不让实车速度调试开关改变本测试的覆盖范围。 */
  MotorConfig_t yaw_config=*motors[5].config;
  YawControlConfig yaw_control=*yaw_config.yaw_control;
- assert(yaw_control.speed_loop_only);
  yaw_control.speed_loop_only=false;
  yaw_control.manual_rate_deg_s=30; /* 固定测试输入，不依赖实车推杆灵敏度调参。 */
  yaw_config.yaw_control=&yaw_control;
@@ -509,28 +515,30 @@ int main(void){
  assert(outputs[5]==0&&outputs[8]==0&&yaw->pid_inner.iout==0);
  /* 超出任一绝对边界均禁止启动双轴；进入范围后采用1971初始目标。 */
  MotorContext_t *pitch=&motors[8];
- pitch->angle_raw=1565;
+ const float lower=pitch->config->limits.gm6020.angle_min;
+ const float upper=pitch->config->limits.gm6020.angle_max;
+ pitch->angle_raw=lower-1;
  gimbal_step(1000,true,true);assert(outputs[5]==0&&outputs[8]==0);
  gimbal_step(1100,true,true);assert(outputs[5]==0&&outputs[8]==0);
- pitch->angle_raw=2206;
+ pitch->angle_raw=upper+1;
  gimbal_step(1104,true,true);assert(outputs[5]==0&&outputs[8]==0);
- pitch->angle_raw=1566;
+ pitch->angle_raw=lower;
  gimbal_step(1108,true,true);assert(pitch->angle_target==1971);
  SensorData sensor={0};
- pitch->angle_target=1570;
+ pitch->angle_target=lower+4;
  for (unsigned i=0;i<10;i++) (void)GimbalController_PitchControl(8,1,&sensor,true);
- assert(pitch->angle_target==1566); /* 连续抬头输入不能累积越过上止点。 */
+ assert(pitch->angle_target==lower); /* 连续抬头输入不能累积越过上止点。 */
  (void)GimbalController_PitchControl(8,-1,&sensor,true);
- assert(pitch->angle_target==1626); /* 边界仍允许反向离开。 */
- pitch->angle_raw=2205;pitch->angle_target=2200;
+ assert(pitch->angle_target==lower+60); /* 边界仍允许反向离开。 */
+ pitch->angle_raw=upper;pitch->angle_target=upper-5;
  for (unsigned i=0;i<10;i++) (void)GimbalController_PitchControl(8,-1,&sensor,true);
- assert(pitch->angle_target==2205);
+ assert(pitch->angle_target==upper);
  (void)GimbalController_PitchControl(8,1,&sensor,true);
- assert(pitch->angle_target==2145);
+ assert(pitch->angle_target==upper-60);
  gimbal_step(1201,true,false);assert(outputs[5]==0&&outputs[8]==0);
  /* 配置中的启动目标也须在范围内，恢复合法配置后可在边界启动。 */
  MotorConfig_t limited_pitch=*pitch->config;
- limited_pitch.limits.gm6020.initial_angle=2206;
+ limited_pitch.limits.gm6020.initial_angle=upper+1;
  pitch->config=&limited_pitch;
  gimbal_step(1300,true,true);gimbal_step(1400,true,true);
  assert(outputs[5]==0&&outputs[8]==0);
@@ -617,6 +625,7 @@ int main(void){
  }
  assert(yaw->pid_outer.error[0]<-4096&&yaw->pid_inner.target==-8);
  gimbal_step(2022,true,true);assert(yaw->angle_target==yaw->angle_raw&&yaw->pid_inner.target==0);
+ assert(g_gimbal_monitor.yaw.speed_target_rpm == 0 && yaw->pid_inner.pout == 0);
  /* 配置缺失和非有限输入都归零两轴，不沿用旧命令。 */
  yaw_config.yaw_control=NULL;gimbal_step(2026,true,true);assert(outputs[5]==0&&outputs[8]==0);
  yaw_config.yaw_control=&yaw_control;

@@ -27,6 +27,18 @@ common_flags="-std=c11 -Wall -Wextra -Werror"
   "$repo_root/tests/host/test_motor_offline_alarm.c" -o "$test_build/test_motor_offline_alarm"
 "$test_build/test_motor_offline_alarm"
 
+"$cc" $common_flags -DROBOT_TYPE_infantry_standard \
+  -I"$repo_root/tests/host/stubs/rtos" -I"$repo_root/tests/host/stubs/can" \
+  -I"$repo_root/runtime/rtos" -I"$repo_root/application" \
+  -I"$repo_root/config" -I"$repo_root/config/robots" \
+  -I"$repo_root/core/common" -I"$repo_root/core/contracts" -I"$repo_root/core/motor" \
+  -I"$repo_root/modules/can_comm" -I"$repo_root/modules/imu" -I"$repo_root/modules/logger" \
+  -I"$repo_root/modules/message_center" -I"$repo_root/bsp/time" -I"$repo_root/bsp/alarm" \
+  -I"$repo_root/services/motor" -I"$repo_root/application/diagnostics" \
+  "$repo_root/runtime/rtos/robot_rtos.c" "$repo_root/application/diagnostics/motor_offline_alarm.c" \
+  "$repo_root/tests/host/test_rtos_control.c" -o "$test_build/test_rtos_control"
+"$test_build/test_rtos_control"
+
 "$cc" $common_flags -std=gnu11 -DROBOT_TYPE_infantry_standard \
   -I"$repo_root/tests/host/stubs/can" -I"$repo_root/config" -I"$repo_root/config/robots" \
   -I"$repo_root/application/gimbal" -I"$repo_root/application/shoot" \

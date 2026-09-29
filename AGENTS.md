@@ -6,8 +6,8 @@ short list of durable constraints and open questions; consult it for control,
 hardware, architecture, and release work. Do not load historical Git revisions
 as current requirements.
 
-- The current startup is bare metal. `runtime/rtos/` is compiled but the scheduler
-  is not started. Supported configurations are `infantry_standard` and
+- The current startup initializes hardware, then starts the static FreeRTOS control
+  task in `runtime/rtos/`. Supported configurations are `infantry_standard` and
   `sentry_swerve`.
 - Keep the dependency direction in `docs/architecture/overview.md`. Unknown CAN
   IDs, payloads, motor limits, geometry, and Jetson protocol details must stay

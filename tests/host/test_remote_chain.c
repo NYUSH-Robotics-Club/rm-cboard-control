@@ -122,7 +122,7 @@ int main(void)
     assert(RC_GetFrameCount() == 1 && chassis.enabled && gimbal.enabled);
     assert(gimbal.trace.flags == 15 && gimbal.trace.rc_sequence == 1);
     assert(gimbal.trace.rc_dispatch_ms == 140 && gimbal.trace.route_ms == 140);
-    assert(fabsf(chassis.vx+0.5f)<0.0001f);
+    assert(fabsf(chassis.vx-0.5f)<0.0001f);
     uint8_t snapshot[18]; RC_GetLastFrame(snapshot);
     assert(memcmp(snapshot,frame,18)==0);
     frame[0]=0xFF; frame[1]|=7; frame[10]=0x66; frame[14]=0xA5; frame[15]=0x5A;
@@ -163,24 +163,26 @@ int main(void)
     RemoteControlMessage remote = {0};
     remote.rc.s[0] = RC_SW_DOWN;
     remote.rc.s[1] = RC_SW_MID;
-    remote.rc.ch[3] = -660;
+    remote.rc.ch[3] = 660;
     yaw_snapshot.initialized = yaw_snapshot.feedback_valid = true;
-    const float positions[] = {4555, 6603, 2507, 459, 8191, 0};
+    const float forward = follow.yaw_forward_ticks;
+    const float positions[] = {forward, fmodf(forward+2048,8192),
+                               fmodf(forward+6144,8192), fmodf(forward+4096,8192),8191,0};
     for (unsigned i = 0; i < sizeof(positions)/sizeof(positions[0]); ++i) {
         now_ms += 4;
         yaw_snapshot.position = positions[i];
         yaw_snapshot.feedback_timestamp_ms = now_ms;
         MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
         MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
-        float theta = (positions[i] - 4555) * (6.28318530718f / 8192);
+        float theta = (forward - positions[i]) * (6.28318530718f / 8192);
         assert(chassis.enabled);
         assert(fabsf(chassis.vx - cosf(theta)) < 0.0001f);
         assert(fabsf(chassis.vy - sinf(theta)) < 0.0001f);
     }
     follow.yaw_ccw_sign = -1;
-    yaw_snapshot.position = 6603;
+    yaw_snapshot.position = fmodf(forward+2048,8192);
     CmdController_Task(now_ms); MsgCenter_Dispatch();
-    assert(chassis.enabled && fabsf(chassis.vy + 1) < 0.0001f);
+    assert(chassis.enabled && fabsf(chassis.vy - 1) < 0.0001f);
     CmdController_Task(now_ms + 21); MsgCenter_Dispatch();
     assert(!chassis.enabled && chassis.vx == 0 && chassis.vy == 0 && chassis.wz == 0);
     yaw_snapshot.position = NAN;
@@ -190,7 +192,7 @@ int main(void)
     yaw_snapshot.position = 8192;
     CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(!chassis.enabled);
-    yaw_snapshot.position = 4555;
+    yaw_snapshot.position = forward;
     yaw_snapshot.feedback_valid = false;
     CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(!chassis.enabled);

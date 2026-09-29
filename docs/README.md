@@ -7,7 +7,7 @@
 
 - [构建、配置与烧录](quickstart.md)
 - [程序结构和数据流](architecture/overview.md)
-- [未启用的 RTOS 设计](architecture/rtos-migration.md)
+- [FreeRTOS 运行与验证](architecture/rtos-migration.md)
 - [项目约束与未决问题](project/PROJECT_MEMO.md)
 - [代码注释约定](project/COMMENTING_STANDARD.md)
 

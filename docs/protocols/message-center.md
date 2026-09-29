@@ -87,7 +87,7 @@ void Example_Init(void)
 
 ## 派发
 
-当前 main 的裸机循环调用（初始化等待路径也会派发；RTOS 未启动）：
+当前控制任务调用（上电初始化的等待路径也会派发）：
 
 ```c
 MsgCenter_Dispatch();

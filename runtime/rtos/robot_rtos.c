@@ -7,13 +7,15 @@
 #include "task.h"
 #include "app_subscriptions.h"
 #include "bsp_time.h"
-#include "buzzer.h"
 #include "can_manager.h"
 #include "gyro_data.h"
 #include "logger.h"
 #include "message_center.h"
+#include "motor_offline_alarm.h"
 
-#define CONTROL_TASK_PERIOD_MS  1U
+/* HAL_Delay(1) waited for two 1 ms tick edges after each completed cycle. */
+#define CONTROL_TASK_DELAY_TICKS (pdMS_TO_TICKS(1U) + 1U)
+_Static_assert(configTICK_RATE_HZ == 1000U, "control pacing assumes the HAL 1 kHz tick");
 #define CONTROL_TASK_STACK_WORDS 1024U
 #define CONTROL_TASK_PRIORITY   (tskIDLE_PRIORITY + 4U)
 
@@ -54,21 +56,22 @@ static void log_can_health(uint32_t now_ms)
 static void control_task(void *argument)
 {
     (void)argument;
-    TickType_t next_wake = xTaskGetTickCount();
 
     for (;;) {
         /* Application timestamps stay on the HAL/BSP clock used before RTOS. */
         const uint32_t now_ms = BspTime_NowMs();
 
-        /* Preserve the verified bare-metal order for the first RTOS version. */
+        /* Keep command dispatch, motor refresh, and the alarm on one task. */
         gyro_data_update(&s_sensor_data);
         AppRuntime_Step(now_ms);
         CmdController_Task(now_ms);
         MsgCenter_Dispatch();
-        Buzzer_Update();
+        /* Dispatch may publish feedback newer than the cycle-start timestamp. */
+        MotorOfflineAlarm_Task(BspTime_NowMs());
         log_can_health(now_ms);
 
-        vTaskDelayUntil(&next_wake, pdMS_TO_TICKS(CONTROL_TASK_PERIOD_MS));
+        /* Preserve callback-based ramps; do not replay overdue control cycles. */
+        vTaskDelay(CONTROL_TASK_DELAY_TICKS);
     }
 }
 

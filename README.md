@@ -15,7 +15,7 @@ The main entry points are:
 
 - **[Project state](docs/project/PROJECT_MEMO.md)** — durable constraints and open questions
 - **[Architecture overview](docs/architecture/overview.md)** — current contracts, services, adapters, and extension rules
-- **[FreeRTOS design](docs/architecture/rtos-migration.md)** — reserved design; current startup remains bare metal
+- **[FreeRTOS runtime](docs/architecture/rtos-migration.md)** — scheduler, control task, and validation limits
 - **[Build and flash](docs/quickstart.md)** — environment setup and current commands
 - **[Message center](docs/protocols/message-center.md)** — publish/subscribe behavior and limits
 - **[Legacy vision protocol](docs/protocols/seasky-vision.md)** — current USB CDC/Seasky compatibility protocol

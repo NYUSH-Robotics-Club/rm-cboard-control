@@ -6,7 +6,9 @@
 ## 不变的边界
 
 - 目标板为 STM32F407 C 板；当前车型仅 `infantry_standard` 与 `sentry_swerve`。
-- `Src/main.c` 使用裸机循环；`runtime/rtos/` 的 FreeRTOS 设计尚未启动。
+- `Src/main.c` 完成上电初始化后调用 `RobotRtos_Start()`；单个静态
+  `control` 任务承接控制循环，空闲任务也使用静态内存。每轮末尾等待两次
+  1 ms tick，保留旧 HAL_Delay(1) 的节奏；板上运行仍待验证。
 - 底层基线冻结范围见根目录 `AGENTS.md`。过去的一次性授权不适用于后续改动。
 - 依赖方向是 `application -> core/services/adapters -> modules -> bsp -> HAL`。
   业务不直接拼 CAN 帧，跨应用数据通过 `core/contracts/` 和消息中心传递。
@@ -24,7 +26,7 @@
 - 云台朝车头的编码参考为 4890，`yaw_ccw_sign=-1`。配置注释中的方向
   待实车确认；不能由软件符号推定物理方向。
 - yaw 为 CAN1 硬件 ID5、RX 0x209、TX 0x2FE 电流指令；
-  `speed_loop_only=false`，即源码选择位置加速度闭环。
+  `speed_loop_only=false`，即源码选择位置与速度串级闭环。
   pitch 为 CAN2 硬件 ID4、RX 0x208、TX 0x1FF 电压指令。
 - pitch 目标编码范围为 1607～2374，启动目标与重力零点均为 1971。
   这些是软件配置，不证明机械端点或越界保护已经实车验证。
@@ -34,9 +36,6 @@
 
 ## 当前需要解决
 
-- 全套主机测试在 `tests/host/test_control_recovery.c` 的旧断言
-  `speed_loop_only == true` 处失败；当前步兵配置为 false。修正测试或
-  配置前不能报告整套回归通过。
 - 改动控制配置时同步核对注释中的方向、单位和限位；现有方向说明仍需实车确认。
 - pitch 机械安全端点、输出方向、边界反复启停风险，以及 yaw/小陀螺
   的带载行为均需匹配固件的实车数据判定。历史日志结论不自动适用于当前板上镜像。

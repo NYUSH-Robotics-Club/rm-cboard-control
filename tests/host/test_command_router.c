@@ -14,7 +14,7 @@ static void test_encoder_follow(void)
     CommandRouterOutput output;
     input.remote_online = true;
     input.remote.rc.s[1] = RC_SW_MID;
-    input.remote.rc.ch[3] = -660; /* Keep the existing RC forward polarity. */
+    input.remote.rc.ch[3] = -660; /* Current mapping: negative ch3 requests backward translation. */
     input.encoder_follow = input.yaw_heading_valid = true;
     input.yaw_feedback_ms = 1000;
     input.sensor.c_yaw = -37;
@@ -54,7 +54,7 @@ static void test_encoder_follow(void)
         assert(determinant > 0.01f);
         float vx = (yy * bx - xy * by) / determinant;
         float vy = (xx * by - xy * bx) / determinant;
-        assert(fabsf(vx - geometry->max_translation_mps * cosf(angle)) < 0.0001f);
+        assert(fabsf(vx + geometry->max_translation_mps * cosf(angle)) < 0.0001f);
         assert(fabsf(vy - geometry->max_translation_mps * sinf(angle)) < 0.0001f);
     }
     input.yaw_relative_deg = 90;
@@ -63,7 +63,7 @@ static void test_encoder_follow(void)
     input.remote.rc.ch[4] = 330;
     CommandRouter_Route(&router, &input, 1000, &output);
     assert(fabsf(output.chassis.vx + 1) < 0.0001f);
-    assert(fabsf(output.chassis.vy) < 0.0001f && output.chassis.wz == 0.5f);
+    assert(fabsf(output.chassis.vy) < 0.0001f && fabsf(output.chassis.wz - 0.003f) < 0.0001f);
     CommandRouter_Route(&router, &input, 1021, &output);
     assert(!output.chassis.enabled && output.chassis.vx == 0 && output.chassis.wz == 0);
     input.yaw_feedback_ms = UINT32_MAX - 9;
@@ -74,7 +74,7 @@ static void test_encoder_follow(void)
     assert(!output.chassis.enabled);
     input.remote.rc.s[1] = RC_SW_DOWN;
     CommandRouter_Route(&router, &input, 5, &output);
-    assert(output.chassis.enabled && output.chassis.vx == 0 && output.chassis.vy == 1);
+    assert(output.chassis.enabled && output.chassis.vx == 0 && output.chassis.vy == -1);
     input.remote_online = false;
     CommandRouter_Route(&router, &input, 5, &output);
     assert(!output.chassis.enabled && !output.gimbal.enabled);
@@ -97,7 +97,7 @@ int main(void)
     input.remote_online = true;
     input.remote.rc.s[0] = RC_SW_UP;
     input.remote.rc.s[1] = RC_SW_UP;
-    input.remote.rc.ch[0] = -660;
+    input.remote.rc.ch[0] = 0; /* Enter spin with centered stick to test heading capture. */
     input.sensor.yaw_total_angle = 10.0f;
     assert(CommandRouter_Route(&router, &input, 1000U, &output) ==
            ROBOT_STATUS_OK);
@@ -106,6 +106,7 @@ int main(void)
     const float first_target = output.spin_hold_yaw_deg;
     assert(first_target == input.sensor.yaw_total_angle);
 
+    input.remote.rc.ch[0] = -660;
     assert(CommandRouter_Route(&router, &input, 1010U, &output) ==
            ROBOT_STATUS_OK);
     assert(output.spin_hold_yaw_deg > first_target + 1.0f);

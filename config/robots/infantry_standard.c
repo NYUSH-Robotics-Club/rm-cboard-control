@@ -1,8 +1,9 @@
 /*
  * 保存步兵全向轮机器人的几何、电机、方向、限幅和控制参数；修改后须重新编译验证。
- * yaw/pitch前馈在各轴.feedforward填写，默认全0关闭：
+ * yaw/pitch前馈在各轴.feedforward填写；当前yaw启用速度前馈，pitch关闭：
  *   ff = clamp(velocity_gain * speed_target_rpm + bias, ±output_max)。
- * velocity_gain单位为原始命令刻度/RPM；bias为有符号原始刻度，零速时也会出力。
+ * velocity_gain单位为原始命令刻度/RPM；bias为有符号原始刻度。
+ * yaw在目标零速且反馈已停稳时强制零输出；pitch没有这条bias抑制规则。
  * output_max填正数才启用，0关闭整项；速度目标取内环限速后的RPM，不额外乘direction。
  * yaw使用电流协议、pitch使用电压协议，系数不能互抄；前馈独立于PID，未知系数先填0。
  * pitch原重力补偿单独叠加，勿用bias重复补偿；失联或参数非法时双轴停止。
