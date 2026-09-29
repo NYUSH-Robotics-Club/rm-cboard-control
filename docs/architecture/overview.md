@@ -6,7 +6,7 @@
 ## 1. 程序从哪里开始
 
 `Src/main.c` 仍是复位后的入口，负责一次性的板级初始化、云台上电位置锁存、
-IMU 校准、应用订阅和通信启动。2026-09-08 核对源码：完成后进入裸机循环，
+IMU 校准、应用订阅和通信启动。完成后进入裸机循环，
 未调用 `RobotRtos_Start()` 或 `AppRuntime_Step()`。当前循环为：
 
 ```text
@@ -16,7 +16,7 @@ IMU 校准、应用订阅和通信启动。2026-09-08 核对源码：完成后�
   -> MsgCenter_Dispatch
        -> chassis / gimbal / shooter 回调
        -> MotorService_Flush（派发结束钩子）
-  -> LED 状态更新
+  -> MotorOfflineAlarm_Task
   -> 1 Hz CAN 统计（日志限流）
   -> HAL_Delay(CMD_REFRESH_INTERVAL_MS)
 ```
@@ -40,7 +40,7 @@ config/robots/     两套车型的只读电机和底盘配置
 tests/host/        不接开发板即可运行的行为与协议测试
 Middlewares/       STM32 中间件和固定版本 FreeRTOS 内核
 Src/ Inc/ Drivers/ CubeMX 生成的硬件基线
-docs/archive/      历史资料，不作为当前接口依据
+docs/              现行说明；旧实验可从 Git 历史查阅
 ```
 
 BSP 全称 Board Support Package（板级支持包）。凡是“这块板使用哪个外设、引脚、
@@ -111,9 +111,9 @@ DJI 还会发布旧的标准电机反馈主题供兼容驱动使用。
 
 | 类型 | 状态 | 修改位置 |
 |---|---|---|
-| 麦轮 | 已实现并用于步兵 | `adapters/chassis/mecanum_chassis_strategy.c` |
+| 麦轮 | 策略保留，现有车型未选择 | `adapters/chassis/mecanum_chassis_strategy.c` |
 | 现有舵轮 | 保留双舵电机哨兵实现 | `application/chassis/sentry_controller.c` |
-| 全向轮 | 安全占位 | 收到轮数、安装角、半径、减速比后实现 strategy |
+| 全向轮 | 当前步兵使用，轮序 2/1/4/3 | `adapters/chassis/omni_chassis_strategy.c` |
 
 通用四模块舵轮还缺模块坐标、零位、轮半径、减速比和反转策略。没有这些资料时
 不能把现有哨兵实现称为通用舵轮。
@@ -152,7 +152,7 @@ DM、本末或瓴控。这是已记录的兼容债务，不能宣称全角色无
 
 云台等待 yaw/pitch 有效反馈后清 PID，yaw 锁存实际角度；pitch 的 `initial_angle`
 非负时作为启动及重新对齐目标，负数则锁存实际角度。步兵 pitch 初始目标为1971，
-绝对编码目标限制在1566～2205；启动时反馈或目标越界则双轴零输出。
+绝对编码目标限制在1607～2374；启动时反馈或目标越界则双轴零输出。
 目标限位不能保证机械位置不因惯性越界；校准回调不会在反馈前输出。
 若仍突跳，先看两轴首帧时间、ID、方向和重力补偿，不要先加大 PID。
 
@@ -184,7 +184,7 @@ cmake --build build/sentry --parallel
 ```
 
 产物 ELF 通过 `just flash` 或统一 VS Code 任务，使用推荐的 OpenOCD 写入 STM32F407。
-详细步骤见[环境与烧录](../tutorials/setup-guide.md)。主机测试不覆盖 ARM 链接、
+详细步骤见[构建与烧录](../quickstart.md)。主机测试不覆盖 ARM 链接、
 中断转接、栈、时序和真实电机，烧录前必须完成两车型 ARM 构建。
 
 ## 10. 当前主要问题
@@ -192,11 +192,13 @@ cmake --build build/sentry --parallel
 - RTOS 未启动，控制、派发和日志仍在裸机循环；执行时间、周期抖动尚未测量。
 - 旧 Quaternion EKF 在首次控制周期使用 libc heap 且未检查分配失败；这不属于
   FreeRTOS 动态任务，但必须在链接后核对 RAM，并作为后续静态化工作处理。
-- 消息队列满会覆盖旧消息，没有丢包统计。
+- 消息队列满会覆盖旧消息，已提供覆盖和批次上限统计；
+  仍须通过实际负载判断是否丢失重要状态。
 - 新电机只有协议与主机测试，没有具体型号配置和实车结果。
 - 云台和哨兵转向的控制状态仍绑定 DJI 旧上下文，新厂商目前主要兼容统一电机
   服务和可配置的驱动/发射路径。
-- 舵轮/全向轮几何、Jetson 新协议、摄像头和标定仍未知。
+- 通用四模块舵轮几何、Jetson 新协议与摄像头标定仍未知；当前步兵全向轮
+  几何已配置，实际方向和带载行为仍须实车验证。
 - gimbal/sentry 仍保留少量 DJI 旧状态读取，是后续兼容债务。
-- 两车型 ARM Release 构建和 ELF 静态检查已通过；尚缺上板调度、时序、栈和
-  真实执行机构验证。
+- 当前主机回归在旧 yaw 速度环断言处失败；修正前不得报告全套通过。
+  构建与板上验证结果应按本次源码和产物分别记录。
