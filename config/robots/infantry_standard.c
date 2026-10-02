@@ -30,7 +30,10 @@ static const YawControlConfig s_yaw_control = {
     .manual_speed_rpm = 60.0f,
     .vision_speed_rpm = 10.0f,
     .spin_speed_rpm = 15.0f,
-    .speed_loop_only = false /* 步兵暂时旁路位置环；哨兵保留串级。 */
+    .speed_loop_only = false, /* 步兵暂时旁路位置环；哨兵保留串级。 */
+    /* Spin hold is deliberately softer than manual yaw to avoid chatter. */
+    .spin_pid_outer = {0.025f, 0.0f, 0.0f, 1000.0f, 20.0f},
+    .spin_pid_inner = {240.0f, 5.0f, 0.0f, 14000.0f, 300.0f}
 };
 
 /**

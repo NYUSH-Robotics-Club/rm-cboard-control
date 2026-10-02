@@ -23,6 +23,9 @@ typedef struct {
     bool yaw_heading_valid;       /* 缺失或非法反馈时禁止中档底盘运动。 */
     float yaw_relative_deg;       /* 相对底盘正前方，俯视逆时针为正。 */
     uint32_t yaw_feedback_ms;      /* 实际电机反馈时间，不以路由时间代替。 */
+    bool yaw_speed_valid;           /* GM6020速度反馈是否有效。 */
+    float yaw_speed_rpm;            /* GM6020转子速度，单位RPM。 */
+    int8_t yaw_speed_ccw_sign;      /* 编码器正方向，+1或-1。 */
 } CommandRouterInput;
 
 typedef struct {
@@ -32,12 +35,16 @@ typedef struct {
     bool spin_mode;
     bool gimbal_follow_mode;
     float spin_hold_yaw_deg;
+    float spin_travel_heading_deg; /* 小陀螺期间的固定世界行进方向，单位deg。 */
 } CommandRouterOutput;
 
 typedef struct {
     bool spin_mode;
     bool gimbal_follow_mode;
     float spin_hold_yaw_deg;
+    float spin_travel_heading_deg; /* 启动小陀螺时锁存的世界行进方向，单位deg。 */
+    float spin_relative_angle_deg; /* 最近一次有效云台相对车体角，单位deg。 */
+    uint32_t spin_exit_brake_until_ms; /* 关闭小陀螺后的yaw制动截止时间。 */
     float previous_yaw_input;
     uint32_t previous_route_ms;
     bool route_time_valid;

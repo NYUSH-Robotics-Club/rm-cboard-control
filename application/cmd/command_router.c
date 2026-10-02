@@ -16,7 +16,10 @@
 #define SPIN_WZ_NORM (10.0f)
 #define SPIN_TRANSLATE_LIMIT_NORM (1.00f)
 #define SPIN_GIMBAL_YAW_ADJ_DEG_PER_S (120.0f)
+#define SPIN_EXIT_BRAKE_MS (2500U)
 #define YAW_TO_CHASSIS_BIAS_DEG (0.0f)
+#define GM6020_RPM_TO_DEG_S (6.0f)
+#define SPIN_YAW_PREDICT_DT_S (0.020f)
 
 #define DIAL_ENTER_DEADBAND (30)
 #define DIAL_EXIT_DEADBAND  (15)
@@ -118,16 +121,22 @@ static void route_chassis(CommandRouter *router,
     }
 
     if (spin_mode) {
-        float yaw_world =
-            normalize_angle_180(sensor->yaw_total_angle);
-        float chassis_world =
-            normalize_angle_180(sensor->c_yaw);
-        float yaw_to_chassis = normalize_angle_180(
-            yaw_world - chassis_world + YAW_TO_CHASSIS_BIAS_DEG);
         float chassis_vx = 0.0f;
         float chassis_vy = 0.0f;
-
-        gimbal_to_chassis_frame(vx, vy, yaw_to_chassis,
+        /* Encoder position is the bounded mechanical angle. The measured
+         * speed only predicts the short command/feedback delay; it is never
+         * integrated, so motor-control transients cannot accumulate drift. */
+        float relative_deg = router->spin_relative_angle_deg;
+        if (input->yaw_heading_valid && isfinite(input->yaw_relative_deg)) {
+            relative_deg = input->yaw_relative_deg;
+        }
+        if (input->yaw_speed_valid && isfinite(input->yaw_speed_rpm) &&
+            (uint32_t)(now_ms - input->yaw_feedback_ms) <= FOLLOW_FEEDBACK_TIMEOUT_MS) {
+            relative_deg += input->yaw_speed_rpm * GM6020_RPM_TO_DEG_S *
+                            (float)input->yaw_speed_ccw_sign * SPIN_YAW_PREDICT_DT_S;
+        }
+        gimbal_to_chassis_frame(vx, vy,
+                                -relative_deg + YAW_TO_CHASSIS_BIAS_DEG,
                                 &chassis_vx, &chassis_vy);
 
         float magnitude = sqrtf(chassis_vx * chassis_vx +
@@ -201,9 +210,12 @@ static void route_gimbal(CommandRouter *router,
     command->enabled = true;
     command->pitch_rate = (float)pitch_raw / max_input;
 
-    if (router->spin_mode) {
+    bool brake_active = router->spin_exit_brake_until_ms != 0U &&
+        (int32_t)(router->spin_exit_brake_until_ms - now_ms) > 0;
+    bool spin_hold = router->spin_mode || brake_active;
+    if (spin_hold) {
         router->spin_hold_yaw_deg +=
-            manual_yaw_rate * SPIN_GIMBAL_YAW_ADJ_DEG_PER_S * dt_s;
+            router->spin_mode ? manual_yaw_rate * SPIN_GIMBAL_YAW_ADJ_DEG_PER_S * dt_s : 0.0f;
         command->yaw_rate = 0.0f;
         command->yaw_rate_memo = 1.0f;
         command->yaw_target_memo = router->spin_hold_yaw_deg;
@@ -254,6 +266,7 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
         memset(&router->gimbal_memory, 0, sizeof(router->gimbal_memory));
         router->spin_mode = false;
         router->gimbal_follow_mode = false;
+        router->spin_exit_brake_until_ms = 0U;
         router->route_time_valid = false;
         router->dial_wz = 0.0f;
         router->dial_active = false;
@@ -271,6 +284,13 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
     bool follow_now = switch_is_mid(input->remote.rc.s[1]);
     bool was_spin = router->spin_mode;
     bool spin_now = switch_is_up(input->remote.rc.s[1]);
+    if (was_spin && !spin_now) {
+        /* Rebase the exit brake to the measured angle. Otherwise the hold
+         * loop may chase a stale target and rotate the head through a large
+         * arc while the chassis is already stopping. */
+        router->spin_hold_yaw_deg = input->sensor.yaw_total_angle;
+        router->spin_exit_brake_until_ms = now_ms + SPIN_EXIT_BRAKE_MS;
+    }
     router->spin_mode = spin_now;
     router->gimbal_follow_mode = follow_now;
      if (spin_now || was_spin) {
@@ -280,6 +300,9 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
     /* Capture the world heading exactly once when entering spin mode. */
     if (spin_now && !was_spin) {
         router->spin_hold_yaw_deg = input->sensor.yaw_total_angle;
+        router->spin_travel_heading_deg = input->sensor.yaw_total_angle;
+        router->spin_relative_angle_deg = input->yaw_heading_valid
+            ? input->yaw_relative_deg : 0.0f;
     }
     router->spin_mode = spin_now;
     router->gimbal_follow_mode = follow_now;
@@ -298,5 +321,6 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
     output->spin_mode = router->spin_mode;
     output->gimbal_follow_mode = router->gimbal_follow_mode;
     output->spin_hold_yaw_deg = router->spin_hold_yaw_deg;
+    output->spin_travel_heading_deg = router->spin_travel_heading_deg;
     return ROBOT_STATUS_OK;
 }

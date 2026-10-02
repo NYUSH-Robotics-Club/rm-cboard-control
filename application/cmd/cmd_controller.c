@@ -40,6 +40,7 @@ static void update_yaw_heading(void) {
     const ChassisFollowConfig *follow = robot ? robot->chassis_follow : NULL;
     s_input.encoder_follow = follow != NULL;
     s_input.yaw_heading_valid = false;
+    s_input.yaw_speed_valid = false;
     if (!follow || follow->yaw_forward_ticks >= 8192U ||
         (follow->yaw_ccw_sign != 1 && follow->yaw_ccw_sign != -1)) return;
 
@@ -61,6 +62,9 @@ static void update_yaw_heading(void) {
     s_input.yaw_relative_deg = ticks * (360.0f / 8192.0f) * follow->yaw_ccw_sign;
     s_input.yaw_feedback_ms = snapshot.feedback_timestamp_ms;
     s_input.yaw_heading_valid = true;
+    s_input.yaw_speed_rpm = snapshot.speed;
+    s_input.yaw_speed_ccw_sign = follow->yaw_ccw_sign;
+    s_input.yaw_speed_valid = true;
 }
 
 static void on_rc_update(const MsgEvent *event, void *user_data) {

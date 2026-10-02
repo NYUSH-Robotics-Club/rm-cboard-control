@@ -122,6 +122,9 @@
   yaw_relative_encoder + bias`得到底盘航向，再用编码器速度与`g_gz`组成短期预测并用绝对角低频校正。
   若云台没有可靠世界参考，只能提供相对/短时方向，不能宣称绝对世界坐标。
 
+- 09-28 参考仓库`NYUSH-Robotics-Club/robomaster-control`本轮无法取得：本机无法解析
+  github.com，网页缓存未返回仓库内容。未据此仓库添加未经核实的实现结论。
+
 - 09-26 最新小陀螺logger `monitor/logger_20260926_231238_721259.txt`：spin有效1655帧，
   运行yaw内环{300,105,0,26000,4000}，但spin反馈取`g_gz`、手动反馈取电机RPM。spin目标
   速度中位-20.6°/s、实际-3.6°/s，误差标准差约35°/s；目标/实际/命令换向69/122/79次，
@@ -1891,3 +1894,61 @@
   零偏需在物理头车对齐时校准。仅给出建议，未改文件。
 
 - 进一步梳理后，当前工作区SPIN分支已经计算`yaw_to_chassis=yaw_total_angle-c_yaw`，但车辆仍走圆时不能仅凭代码断定变换正确：若CMD logger中`c_yaw`/`yaw_to_chassis`在车体旋转时不随之变化，实际仍是车体坐标命令，根因是底盘IMU数据未更新或时间不同步；若两者变化但方向相反，才是角度符号问题。`gyro_data.c`在读取WT61C前记录IMU行，IMU日志的c_yaw会滞后一帧，但CMD路由使用发布前已更新的SensorData。建议先用新增CMD字段判别，再决定改符号、偏置或传感器链路，未改文件。
+
+- 2026-09-28小陀螺修复：路由器在进入SPIN时锁存`spin_travel_heading_deg`，平移变换固定使用该世界方向与底盘`c_yaw`之差，避免云台保持误差使行进轨迹弯曲。yaw SPIN位置误差超过8度且持续1秒时，重置连续圈偏置和PID历史；该重置不改变锁存的行进方向。修改位于`application/cmd/command_router.[ch]`和`application/gimbal/gimbal_controller.c`，未烧录。主机交叉编译验证受当前环境缺少ARM编译器（`-mthumb`不支持）阻断。
+
+- 2026-09-28追加修复：确认底盘无IMU时不能继续使用`SensorData.c_yaw`作为SPIN平移反馈。`command_router.c`现在优先用已标定的GM6020 yaw编码器相对角重建`chassis_world = gimbal_world - yaw_relative_deg`，并使用锁存的行进世界方向计算逆旋转；编码器反馈无效或超过20ms时禁用SPIN底盘命令。Linux交叉配置构建已通过。
+
+- 2026-09-28再次修复：`SPIN_WZ_NORM`原为10，超出归一化接口范围，导致底盘适配器将旋转压到上限并在轮速缩放时压低平移分量；已恢复为0.33作为安全起点。最新日志`logger_20260928_144702_715371.txt`中底盘`vx/vy/wz`全程为0，没有可用于验证直线行进的SPIN测试段。
+
+- 2026-09-28按用户要求回退上一轮“无底盘IMU改用yaw编码器”和`SPIN_WZ_NORM=0.33`改动：恢复SPIN使用`SensorData.c_yaw`，恢复`SPIN_WZ_NORM=10.0f`；保留更早加入的行进方向锁存和yaw误差周期重置。Linux构建通过，未烧录。
+
+- 2026-09-28试验新方案：底盘应用根据四个全向轮实际RPM和`OmniWheelConfig`几何参数，以3x3最小二乘反解车体`wz`并积分轮速航向；命令路由在SPIN中用进入时云台相对角加轮速航向增量反旋转平移向量，保持原`wz`指令不变。反馈无效或过期时停止SPIN底盘命令。修改涉及`application/chassis/chassis_controller.[ch]`、`application/cmd/command_router.[ch]`和`cmd_controller.c`；Linux构建通过，未烧录。
+
+- 2026-09-28按用户要求撤回轮速里程计试验：删除底盘RPM反解、航向积分、路由器里程计字段和反馈失效停发逻辑，恢复上一版基于`SensorData.c_yaw`的SPIN路径。Linux构建通过，未烧录。
+
+- 2026-09-28新增6020速度补偿试验：`cmd_controller.c`读取已配置GM6020 yaw的统一`MotorSnapshot.speed`（RPM），路由器在SPIN入口清零积分并按`RPM*6 deg/s`及标定正负号积分相对角，只旋转`vx/vy`，不修改`wz`。速度反馈暂时无效时保持上一角度，不禁用整车。宏`SPIN_YAW_SPEED_SIGN=-1`需实车验证；Linux构建通过，未烧录。
+
+- 2026-09-28修正6020补偿：取消速度无限积分，改为以已标定GM6020编码器相对角为主，6020实际RPM仅预测20ms控制延迟；避免云台保持瞬态造成角度漂移。`wz`仍保持原值，Linux构建通过，未烧录。
+
+- 新任务：为遥控器二档（`s[1]`上档，`YAW_CONTROL_SPIN`）增加独立yaw外环/内环PID。新增`YawControlConfig.spin_pid_outer/inner`；步兵使用外环`0.08/0/0`、内环`300/60/0`，积分限幅分别100和2000。普通手动档继续使用电机配置PID；SPIN监控字段改为报告独立速度环。Linux构建通过，未烧录。
+
+- 新任务：关闭SPIN时增加300ms yaw退出制动窗口。底盘立即退出旋转，但云台命令继续发布原小陀螺绝对保持目标，禁止此窗口内的手动yaw改目标；窗口结束后恢复普通手动PID。Linux构建通过，未烧录。
+
+- 退出制动修正：切换离开SPIN的瞬间将保持目标重置为当前`yaw_total_angle`，制动阶段只刹当前角速度，不再追逐旧的世界角目标，避免车头退出时转过大角度。Linux构建通过，未烧录。
+
+- 用户反馈300ms仍会转半圈，退出yaw制动窗口已延长至800ms；制动目标仍为切换瞬间当前角度。Linux构建通过，未烧录。
+
+- 用户反馈停止约2秒后仍有小转动；退出保持窗口已延长至2500ms，避免过早释放小陀螺yaw保持力。Linux构建通过，未烧录。
+
+- 09-28复核步兵SPIN云台保持链路：进入小陀螺时锁存`yaw_total_angle`为
+  `spin_hold_yaw_deg`，之后用世界航向误差做SPIN专用位置外环，再串SPIN专用速度内环驱动
+  yaw电机；步兵`speed_loop_only=false`，当前外环`{0.08,0,0,2200,100}`、内环
+  `{300,60,0,26000,2000}`，速度反馈为`g_gz`，目标速度上限由`spin_speed_rpm=15`给出。
+  yaw杆只改变锁存目标（120°/s），不直接绕过保持环。仅源码复核，未改控制代码、构建、烧录
+  或实车验证。
+
+- 09-28补充右摇杆控制语义：SPIN期间`rc.ch[0]`经过取反/归一化后，以120°/s乘以回调周期
+  累加保持目标；它不是直接的yaw电机速度命令。松杆后目标冻结，云台继续用`yaw_total_angle`
+  角度误差和`g_gz`速度反馈闭环回到目标；15RPM速度限幅约等于90°/s。摇杆正负方向仍需
+  实车结合遥控器通道和电机安装方向确认。
+
+- 09-28复核IMU来源：云台BMI088经SPI读取后由本地`QuaternionEKF`输出`yaw_total_angle`和
+  `g_gz`，小陀螺yaw保持使用该链路；底盘`c_yaw`来自USART1上的WT61C协议0x53欧拉角帧，
+  工程只解析并直接使用其厂商姿态输出，没有在C板侧对WT61C再做四元数解算。WT61C的`c_gz`
+  仅做单位转换后发布。本次仅源码复核，未修改控制代码、构建、烧录或实车验证。
+
+- 09-28排查SPIN世界角慢漂：当前工作区`gimbal_controller.c`存在8°/1s主动rebase，执行
+  `s_spin_turn_offset_deg -= error_deg`并将误差清零，会把漂移后的当前IMU角重新设为保持基准，
+  是高优先级根因候选。另有独立传感器风险：QuaternionEKF固定`GyroBias[2]=0`，只依赖启动时
+  `gyro_offset[2]`，残余Z轴偏置或温漂会使`yaw_total_angle`积分漂移。当前无有效最新SPIN日志且
+  Flash身份未核对，不能断言实机已运行工作区版本；本次仅源码诊断，未修改/构建/烧录。
+
+- 2026-09-28确认C板绿灯常亮是启动完成/主循环运行的状态指示，并且仅能说明受监视的电机反馈在线；它不等价于遥控器在线、CAN解锁、PID正常或ST-Link已连接目标。`just doctor`能枚举ST-Link，但OpenOCD仍报告`init mode failed`，本次仅记录诊断，未修改控制代码或烧录。
+
+- 2026-09-28最新烧录日志已识别ST-Link V2（`0483:374B`）并读到目标电压3.298V，但在`init mode failed`处无法连接C板MCU；USB探针正常，SWD目标连接仍失败。未修改代码。
+
+- 09-28按用户要求移除SPIN yaw的`8°/1秒`主动rebase，避免误差达到阈值后把漂移后的当前IMU角
+  重新当作保持目标；保留进入SPIN时的一次性目标建立及右摇杆目标调整。修改仅在
+  `application/gimbal/gimbal_controller.c`，尚未烧录。主机回归在既有`test_control_recovery`
+  的`speed_loop_only=true`旧断言处失败；build目录无CMake cache，未完成有效CMake编译。

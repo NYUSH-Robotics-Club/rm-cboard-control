@@ -60,6 +60,9 @@ static bool s_feedback_stable_seen;
 static uint32_t s_feedback_stable_since_ms;
 static float s_yaw_last_speed_target_rpm;
 static bool s_yaw_speed_target_valid;
+static PID_Controller s_spin_outer_pid;
+static PID_Controller s_spin_inner_pid;
+static bool s_spin_pid_valid;
 
 
 static void yaw_invalidate(void);
@@ -80,13 +83,9 @@ static bool calculate_feedforward(const GimbalFeedforwardConfig *cfg,
   return true;
 }
 
-static void yaw_clear_speed_integral(MotorContext_t *yaw,
-                                       float speed_feedback) {
-    PID_Controller *pid;
-
-    if (!yaw) return;
-
-    pid = &yaw->pid_inner;
+static void yaw_clear_speed_integral(PID_Controller *pid,
+                                     float speed_feedback) {
+    if (!pid) return;
     pid->integral = 0.0f;
     pid->iout = 0.0f;
     pid->iterm = 0.0f;
@@ -100,14 +99,10 @@ static void yaw_clear_speed_integral(MotorContext_t *yaw,
     pid->last_measure = speed_feedback;
   }
 
-  static void yaw_bleed_speed_integral(MotorContext_t *yaw,
+  static void yaw_bleed_speed_integral(PID_Controller *pid,
                                        float speed_feedback,
                                        float factor) {
-    PID_Controller *pid;
-
-    if (!yaw) return;
-
-    pid = &yaw->pid_inner;
+    if (!pid) return;
     pid->integral *= factor;
     pid->iout *= factor;
     pid->iterm = 0.0f;
@@ -370,6 +365,18 @@ static bool yaw_config_valid(const YawControlConfig *cfg) {
       isfinite(cfg->spin_speed_rpm) && cfg->spin_speed_rpm > 0.0f;
 }
 
+static bool spin_pid_config_valid(const YawControlConfig *cfg) {
+  if (!cfg) return false;
+  const PIDParams_t *outer = &cfg->spin_pid_outer;
+  const PIDParams_t *inner = &cfg->spin_pid_inner;
+  return isfinite(outer->kp) && isfinite(outer->ki) && isfinite(outer->kd) &&
+         isfinite(outer->output_max) && isfinite(outer->integral_max) &&
+         outer->kp > 0.0f && outer->output_max > 0.0f && outer->integral_max >= 0.0f &&
+         isfinite(inner->kp) && isfinite(inner->ki) && isfinite(inner->kd) &&
+         isfinite(inner->output_max) && isfinite(inner->integral_max) &&
+         inner->kp > 0.0f && inner->output_max > 0.0f && inner->integral_max >= 0.0f;
+}
+
 static void yaw_invalidate(void) {
   s_yaw_reference.valid = false;
   s_yaw_mode_valid = false;
@@ -387,6 +394,9 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     return 0;
   }
   const YawControlConfig *cfg = yaw->config->yaw_control;
+  bool use_spin_pid = mode == YAW_CONTROL_SPIN && spin_pid_config_valid(cfg);
+  PID_Controller *outer_pid = use_spin_pid ? &s_spin_outer_pid : &yaw->pid_outer;
+  PID_Controller *inner_pid = use_spin_pid ? &s_spin_inner_pid : &yaw->pid_inner;
   float dt_s;
   if (!yaw_config_valid(cfg) || !isfinite(rate_normalized) ||
       (unsigned)mode > YAW_CONTROL_SPIN ||
@@ -413,10 +423,23 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
   bool mode_changed = !s_yaw_mode_valid || mode != s_yaw_mode;
   if (mode_changed) {
     s_yaw_reference.target_ticks = s_yaw_reference.position_ticks;
-    PID_Reset(&yaw->pid_outer);
-    PID_Reset(&yaw->pid_inner);
+    if (use_spin_pid) {
+      PID_Init(&s_spin_outer_pid, cfg->spin_pid_outer.kp, cfg->spin_pid_outer.ki,
+               cfg->spin_pid_outer.kd, cfg->spin_pid_outer.output_max,
+               cfg->spin_pid_outer.integral_max);
+      PID_Init(&s_spin_inner_pid, cfg->spin_pid_inner.kp, cfg->spin_pid_inner.ki,
+               cfg->spin_pid_inner.kd, cfg->spin_pid_inner.output_max,
+               cfg->spin_pid_inner.integral_max);
+      s_spin_pid_valid = true;
+      outer_pid = &s_spin_outer_pid;
+      inner_pid = &s_spin_inner_pid;
+    } else {
+      s_spin_pid_valid = false;
+    }
+    PID_Reset(outer_pid);
+    PID_Reset(inner_pid);
     /* 模式切换以当前速度初始化D历史，避免运动中从零测量产生尖峰。 */
-    yaw->pid_inner.last_measure = speed_feedback;
+    inner_pid->last_measure = speed_feedback;
     if (mode == YAW_CONTROL_SPIN) {
       float error_deg = s_last_cmd.yaw_target_memo - sensor_data->yaw_total_angle;
       float nearest_deg = YawReference_Wrap((error_deg + 180.0f) *
@@ -438,7 +461,8 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
         s_last_cmd.vision_yaw_err_rad * YAW_ENCODER_TICKS / (2.0f * (float)M_PI);
     rpm_limit = cfg->vision_speed_rpm;
   } else {
-    /* 世界航向的圈数只在进入spin时选一次，运动中保留连续误差。 */
+    /* 世界航向目标只在进入spin时建立一次；持续保留误差，
+     * 让云台始终追踪最初锁存的世界角度，不接受漂移后的角度重定位。 */
     float error_deg = s_last_cmd.yaw_target_memo - sensor_data->yaw_total_angle +
                       s_spin_turn_offset_deg;
     s_yaw_reference.target_ticks = s_yaw_reference.position_ticks +
@@ -458,7 +482,7 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     speed_target = fmaxf(-1.0f, fminf(rate_normalized, 1.0f)) *
                    cfg->manual_rate_deg_s / 6.0f;
   } else {
-    speed_target = PID_CalculateDivided(&yaw->pid_outer, 0.0f, -angle_error,
+    speed_target = PID_CalculateDivided(outer_pid, 0.0f, -angle_error,
                                         PID_YAW_OUTER_DIVIDER);
   }
  speed_target = fmaxf(-rpm_limit, fminf(speed_target, rpm_limit));
@@ -482,11 +506,11 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
        speed_target > YAW_TARGET_ZERO_EPS_RPM);
 
   if (entered_zero) {
-    yaw_clear_speed_integral(yaw, speed_feedback);
+    yaw_clear_speed_integral(inner_pid, speed_feedback);
   }
 
   if (reversed) {
-    yaw_bleed_speed_integral(yaw,
+    yaw_bleed_speed_integral(inner_pid,
                              speed_feedback,
                              YAW_REVERSE_INTEGRAL_FACTOR);
   }
@@ -497,7 +521,7 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
    */
   if (target_is_zero &&
       fabsf(speed_feedback) <= YAW_STOP_SPEED_EPS_RPM) {
-    yaw_clear_speed_integral(yaw, speed_feedback);
+    yaw_clear_speed_integral(inner_pid, speed_feedback);
 
     s_yaw_last_speed_target_rpm = speed_target;
     s_yaw_speed_target_valid = true;
@@ -511,7 +535,7 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     yaw_invalidate();
     return 0;
   }
-  float current = PID_Calculate(&yaw->pid_inner, speed_target, speed_feedback)
+  float current = PID_Calculate(inner_pid, speed_target, speed_feedback)
                 + feedforward;
   if (!isfinite(current)) {
     yaw_invalidate();
@@ -773,9 +797,12 @@ static GimbalMonitorAxis monitor_axis(uint8_t id, unsigned index, bool active) {
       s_yaw_reference.target_ticks : motor->angle_target;
   axis.speed_actual_rpm = motor->speed_rpm;
   /* PID_Reset保留target/actual，禁用时不能把它们冒充当前有效目标。 */
-  axis.speed_target_rpm = active ? motor->pid_inner.target : 0.0f;
-  axis.speed_loop_actual_rpm = active ? motor->pid_inner.actual : 0.0f;
-  axis.speed_loop_dt_s = active ? motor->pid_inner.dt : 0.0f;
+  const PID_Controller *speed_pid =
+      yaw && s_yaw_mode == YAW_CONTROL_SPIN && s_spin_pid_valid
+          ? &s_spin_inner_pid : &motor->pid_inner;
+  axis.speed_target_rpm = active ? speed_pid->target : 0.0f;
+  axis.speed_loop_actual_rpm = active ? speed_pid->actual : 0.0f;
+  axis.speed_loop_dt_s = active ? speed_pid->dt : 0.0f;
   return axis;
 }
 
@@ -805,7 +832,8 @@ static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
   next.yaw_mode = yaw_active ? (uint32_t)s_yaw_mode : UINT32_MAX;
   MotorContext_t *yaw = MotorDriver_GetContext(s_yaw_motor_id);
   if (yaw && yaw->initialized) {
-    const PID_Controller *pid = &yaw->pid_inner;
+    const PID_Controller *pid = s_yaw_mode == YAW_CONTROL_SPIN && s_spin_pid_valid
+        ? &s_spin_inner_pid : &yaw->pid_inner;
     next.yaw_pid_pout = yaw_active ? pid->pout : NAN;
     next.yaw_pid_iout = yaw_active ? pid->iout : NAN;
     next.yaw_pid_dout = yaw_active ? pid->dout : NAN;

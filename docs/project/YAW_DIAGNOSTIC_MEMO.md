@@ -143,6 +143,10 @@
   `yaw_total_angle`不可靠时宣称世界坐标。速度修正应只用于预测角（编码器RPM换算角速度
   后乘实测延迟），并保留低频绝对角校正，避免单纯积分漂移。
 
+- 09-28 用户改给参考仓库`NYUSH-Robotics-Club/robomaster-control`；本机网络无法解析
+  github.com，网页缓存也未能取得仓库内容，因此本轮没有把未验证代码归入参考实现。当前
+  工程建议仍以“云台相对角旋转遥控平移向量”和“底盘世界航向估计”两种语义分开验证。
+
 - 09-26 烧录时出现`STLink error (9): Get IDCODE error`。主机`just doctor`能看到ST-Link
   序列号`0669FF535548877187254949`并通过OpenOCD配置检查，但未连接MCU；该错误仍停在
   SWD IDCODE读取，尚无新固件写入证据。项目flash默认走OpenOCD，pyOCD只用于RTT连接；
@@ -794,3 +798,80 @@
   `command->wz=SPIN_WZ_NORM`；不能只用`-c_yaw`。若云台/底盘IMU零点不同，需增加并校准安装偏置。
 
 - 若左摇杆前进仍走圆，当前代码虽已使用`yaw_total_angle-c_yaw`，但需先判别数据：车体旋转时`c_yaw`应连续变化，`yaw_to_chassis`应约反向变化，`chassis_cmd_vx/vy`应同步旋转；若角度不变，是WT61C/消息更新或时间戳问题；若角度变化方向反了，才将差值改为`c_yaw-yaw_total_angle`。CMD logger已记录这些字段，下一轮应按路由时间逐帧检查，不能先盲改旋转符号。
+
+- 2026-09-28已在父目录发现并阅读本地参考仓库`/home/nyu/robomaster-control`。其当前小陀螺实现位于`application/cmd/cmd_controller.c`：使用`c_yaw-yaw_total_angle`将摇杆向量从云台系旋到底盘系，设置固定`SPIN_WZ_NORM=0.33`，并在进入小陀螺时锁存云台绝对yaw；底盘控制器随后按四轮麦轮混合输出。该实现依赖底盘IMU的`c_yaw`，不能直接移植到无底盘IMU的硬件。参考文档中的`CHASSIS_ROTATE`示例（`docs/湖南大学代码.md`）属于历史代码片段，固定`wz=4000`，不应当与当前归一化接口混用。仅阅读，未修改或烧录。
+
+- 2026-09-28已修改当前上层路由：SPIN进入时锁存`spin_travel_heading_deg`，平移不再跟随云台保持误差；yaw保持误差达到8度并持续1秒时重置连续圈偏置及PID历史。该逻辑尚未烧录，需用日志确认不会造成云台周期性跳变；ARM交叉编译因环境缺少支持`-mthumb`的编译器未完成。
+
+- 2026-09-28根据“仍不能走直线”复核：底盘没有IMU时，原SPIN分支使用`c_yaw`无法得到车体真实世界航向；且其旋转符号没有复用中档已验证的yaw编码器坐标。现改为使用`yaw_relative_deg`重建底盘航向，并在编码器反馈失效/超时后停发SPIN底盘命令；目标行进方向仍由进入SPIN时锁存。Linux构建已通过，未烧录。
+
+- 2026-09-28最新检查发现当前配置`SPIN_WZ_NORM=10`不符合归一化`wz`接口；全向底盘适配器会先将其夹到5，再按轮速峰值整体缩放，从而严重削弱平移并放大走弯现象。已改为0.33。最新日志无SPIN非零底盘命令，需重新烧录后采集有效测试段。
+
+- 2026-09-28用户要求回退上一轮改动，已恢复`SPIN_WZ_NORM=10.0f`及`c_yaw`平移变换，撤销yaw编码器航向重建和反馈超时停发逻辑；保留先前的SPIN行进方向锁存与yaw误差周期重置。未烧录，Linux构建通过。
+
+- 2026-09-28已试验轮速里程计方案：`ChassisApp_GetYawOdomDeg()`从四轮实际RPM反解并积分车体角速度；SPIN平移使用进入时`yaw_relative_deg`与里程计增量的合成角，yaw旋转指令保持原值。需烧录后验证轮序、驱动方向和`wz_measured`符号，当前未烧录。
+
+- 2026-09-28用户反馈轮速里程计版本导致小陀螺和底盘均不动，已完整撤回该试验，恢复上一版`c_yaw`路径；未烧录，Linux构建通过。
+
+- 2026-09-28按用户要求改为读取GM6020 yaw实际速度：通过`MotorService_GetSnapshot`取得`MotorSnapshot.speed`，SPIN期间以6 deg/s/RPM积分云台相对车体角，再反向旋转平移命令；小陀螺`wz`保持原值。需要日志确认速度正负号，若补偿方向相反仅翻转`SPIN_YAW_SPEED_SIGN`，未烧录。
+
+- 2026-09-28因直线仍失败，撤销6020速度无限积分；当前以`yaw_relative_deg`编码器位置为主，速度只作20ms前馈预测。该方案不累计误差，需重新烧录后记录相对角、6020 RPM、预测角和底盘`vx/vy`验证符号。
+
+- 新任务已实现独立SPIN yaw PID：模式进入时初始化独立外环/内环，普通手动模式不复用该状态；步兵参数为外环Kp0.08、内环Kp300/Ki60，较普通内环Ki105更保守。监控输出同步切换到SPIN内环，未烧录。
+
+- 新增SPIN退出制动：切换离开小陀螺后保持yaw绝对目标300ms，期间底盘已停止自转但云台继续用SPIN保持控制，以抵消惯性；之后才切回手动模式。未烧录。
+
+- 用户反馈退出时车头转半圈；已将退出制动目标在切换瞬间重置为当前实际yaw，避免旧目标造成大幅回转。未烧录。
+
+- 用户再次反馈仍转半圈；已将SPIN退出制动时间由300ms延长至800ms，等待实际角速度降至零后再切回手动模式。未烧录。
+
+- 用户反馈停止后约2秒小转动；已将退出保持窗口由800ms延长至2500ms，继续保持当前角度后再切回手动模式。未烧录。
+
+- 2026-09-28最新`monitor/logger_20260928_184511_181535.txt`只有2帧`yaw_mode=2`，且底盘`vx/vy=0`、yaw实际速度0到-14RPM，不能用于PID调参。两帧显示当前独立内环参数已是Kp300/Ki60；需重新烧录并采集连续SPIN段后再确认调整效果。
+
+- 2026-09-28本次代码复核确认步兵小陀螺的云台原位保持方式：进入SPIN时一次性保存
+  `sensor.yaw_total_angle`到`spin_hold_yaw_deg`；期间普通yaw杆不直接给电机速度，而以
+  `yaw_target_memo - sensor.yaw_total_angle`作为世界航向误差，经SPIN专用位置外环转换为
+  速度目标，再经SPIN专用速度内环输出yaw电机电流。步兵配置`speed_loop_only=false`，当前
+  SPIN参数为外环`{0.08,0,0,2200,100}`、内环`{300,60,0,26000,2000}`，并用`g_gz`作为
+  速度反馈、`spin_speed_rpm=15`限制外环速度目标；因此不是停电保持、固定电流保持或只靠
+  电机RPM积分。小陀螺期间车体另行发布固定`SPIN_WZ_NORM`旋转命令；yaw杆只以
+  `SPIN_GIMBAL_YAW_ADJ_DEG_PER_S=120`改变保持目标。证据为
+  `application/cmd/command_router.c`、`application/gimbal/gimbal_controller.c`和
+  `config/robots/infantry_standard.c`；本次仅源码复核和备忘录更新，未改控制代码、构建、烧录或实车验证。
+
+- 2026-09-28进一步核对右摇杆路径：`rc.ch[0]`先取反并归一化；SPIN期间不直接作为yaw电机
+  速度命令，而按`manual_yaw_rate * 120°/s * dt`累加到`spin_hold_yaw_deg`。因此持续拨杆会
+  持续移动世界航向目标，松杆后目标冻结并回到保持；当前`spin_speed_rpm=15`将实际速度目标
+  限制为约90°/s。控制反馈同时使用`yaw_total_angle`做角度误差、`g_gz`换算成°/s做速度误差，
+  最终由内环输出yaw电机电流。右摇杆正负方向仍需结合遥控器通道定义和电机安装方向实车确认。
+
+- 2026-09-28复核C板IMU数据链路：工程同时使用两套IMU。云台BMI088通过SPI读取原始陀螺/加速度，
+  在`modules/imu/gyro_data.c`中送入`QuaternionEKF`，输出`yaw/pitch/roll`和多圈
+  `yaw_total_angle`；小陀螺yaw保持使用这套四元数EKF航向及BMI088的`g_gz`。底盘侧WT61C通过
+  USART1 DMA/Idle接收协议帧，固件解析0x51加速度、0x52角速度、0x53厂商输出的欧拉角，直接把
+  `d->yaw`写入`SensorData.c_yaw`，当前工程没有再对WT61C做四元数解算。故`c_yaw`不是本地
+  QuaternionEKF结果，而是WT61C内部姿态输出；`c_gz`则是WT61C角速度换算为rad/s。本次仅源码复核和
+  备忘录更新，未修改控制逻辑或硬件。
+
+- 2026-09-28针对“SPIN世界角慢慢漂移”复核发现一个高优先级控制逻辑：
+  `gimbal_controller.c`在SPIN误差达到8°且距上次重置超过1s时执行
+  `s_spin_turn_offset_deg -= error_deg; error_deg = 0`，同时清空速度积分。该操作会把当前
+  漂移后的IMU角度重新当作保持基准，因而不能保持最初锁存的世界角，表现为漂移超过阈值后继续
+  跟随当前角度。该逻辑是当前工作区相对基线新增的主动“rebase”，应优先作为根因候选；本次未修改。
+  即使移除该逻辑，BMI088的QuaternionEKF仍将`GyroBias[2]`固定为0，yaw只能依赖启动静止校准的
+  `gyro_offset[2]`，温漂或残余Z轴偏置仍会造成积分漂移。当前最新日志没有可确认的有效SPIN段，
+  尚不能证明运行中的Flash是否包含此工作区逻辑；未烧录、未改控制代码。
+
+- 2026-09-28新的直线行进方案（仅建议，未修改）：不再用云台保持误差或`c_yaw`直接补偿平移；从四个底盘轮实际RPM和`OmniWheelConfig`的驱动方向、力臂参数反解车体角速度`wz_meas`，积分得到底盘转角增量。进入SPIN时只用一次已校准的头车相对角建立初始世界航向，之后使用轮速里程计的转角更新车体航向；平移向量按`R(-(theta_chassis_world-theta_travel_world))`变换。`command->wz`保持现有值，因此不改变小陀螺转速。必须记录`wz_cmd、wz_meas、theta_odom、vx/vy`及四轮RPM，先确认反解符号和轮序，再实现。
+
+- 2026-09-28用户反馈所有连接正常但绿灯常亮。源码定义表明C板绿灯表示启动完成并进入主循环；报警文档进一步说明它只表示被监视的电机反馈在线，不代表遥控器在线、CAN已解锁、PID正确或固件已成功烧录。`just doctor`可枚举ST-Link序列号`0669FF535548877187254949`，但最新OpenOCD日志仍为目标初始化失败（`init mode failed`），因此绿灯不能作为SWD连接成功的依据。本次仅诊断，未改控制代码或烧录。
+
+- 2026-09-28复核最新`openocd-flash.log`：已识别`STLINK V2J48M35`（VID:PID`0483:374B`）并读到目标电压约3.298V；失败点是`init mode failed (unable to connect to the target)`。结论是ST-Link USB端正常，但未建立到C板MCU的SWD连接；本次未改代码。
+
+- 2026-09-28按用户要求移除SPIN yaw的`8°/1秒`主动rebase：删除阈值/计时状态和
+  `s_spin_turn_offset_deg -= error_deg; error_deg=0`分支；SPIN保持目标现在只在进入模式时建立，
+  后续持续保留世界角误差并追踪原始目标。保留右摇杆对锁存目标的正常调整和模式切换时的重新初始化。
+  源码改动位于`application/gimbal/gimbal_controller.c`；未烧录。`CC=gcc sh tests/host/run_tests.sh`
+  执行到既有`test_control_recovery.c:436`断言`yaw_control.speed_loop_only`失败后中止，该断言与本次
+  SPIN rebase删除无关；`cmake --build build -j2`因build目录无CMake cache未执行有效编译。

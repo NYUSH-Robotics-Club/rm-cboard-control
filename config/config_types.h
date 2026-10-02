@@ -130,6 +130,8 @@ typedef struct {
     float vision_speed_rpm;        /* 明确进入视觉模式时的速度上限。 */
     float spin_speed_rpm;          /* 明确进入spin模式时的速度上限。 */
     bool speed_loop_only;          /* true：暂时旁路位置环，只调电机RPM速度环。 */
+    PIDParams_t spin_pid_outer;    /* 小陀螺独立位置环；全零表示沿用电机PID。 */
+    PIDParams_t spin_pid_inner;    /* 小陀螺独立速度环；全零表示沿用电机PID。 */
 } YawControlConfig;
 
 /* 仅由云台应用在速度PID之后叠加，不改变PID算法或电调模式。 */
