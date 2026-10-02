@@ -60,6 +60,12 @@ HAL_StatusTypeDef CAN_Manager_Init(CAN_Manager_t *manager,
     manager->tx_frames[3].std_id = 0x1FE;
     manager->tx_frames[4].std_id = 0x2FE;
 
+    for (unsigned i = 0U; i < robot_config->total_motor_count; ++i) {
+        const MotorConfig_t *motor = &robot_config->motor_configs[i];
+        if (motor->role == MOTOR_ROLE_GIMBAL_YAW && motor->vendor == MOTOR_VENDOR_DJI &&
+            motor->type == MOTOR_TYPE_GM6020 && motor->can_channel == channel)
+            BspCan_TraceConfigure(bsp_channel, motor->can_tx_id, motor->can_rx_id, motor->tx_slot);
+    }
     manager->initialized = 1;
     return HAL_OK;
 }
@@ -150,6 +156,10 @@ void CAN_Manager_ProcessCallback(CAN_Manager_t *manager, CAN_HandleTypeDef *hcan
         uint16_t angle_raw = (uint16_t)((rx.data[0] << 8) | rx.data[1]);
         int16_t  speed_rpm = (int16_t)((rx.data[2] << 8) | rx.data[3]);
         int16_t  current   = (int16_t)((rx.data[4] << 8) | rx.data[5]);
+
+        /* Record every decoded receive before latest-state coalescing. */
+        BspCan_TraceFeedback(channel, (uint16_t)rx.standard_id, current_tick,
+                             current, (uint32_t)(int32_t)speed_rpm);
 
         // Publish to message center
         GM6020FeedbackEvent gev = {
@@ -253,6 +263,9 @@ HAL_StatusTypeDef CAN_Manager_SendMotorCurrent(CAN_Manager_t *manager,
 
     // Aggregate current into appropriate slot
     if (motor->tx_slot < 4) {
+        BspCanChannel channel;
+        if (to_bsp_channel(manager->channel, &channel))
+            BspCan_TraceCommand(channel, motor->can_tx_id, motor->tx_slot, current);
         tx_frame->currents[motor->tx_slot] = current;
         tx_frame->pending = 1;  // Mark frame as pending
     } else {

@@ -207,3 +207,12 @@ int main(void)
     puts("DJI voltage/current command integration: PASS");
     return 0;
 }
+
+void BspCan_TraceConfigure(BspCanChannel c, uint16_t tx, uint16_t rx, uint8_t slot)
+{ (void)c; (void)tx; (void)rx; (void)slot; }
+void BspCan_TraceCommand(BspCanChannel c, uint16_t tx, uint8_t slot, int16_t raw)
+{ (void)c; (void)tx; (void)slot; (void)raw; }
+void BspCan_TraceRead(MotorTraceBatch *b) { memset(b, 0, sizeof(*b)); }
+
+void BspCan_TraceFeedback(BspCanChannel c, uint16_t id, uint32_t ms, int32_t raw, uint32_t detail)
+{ (void)c; (void)id; assert(ms == receive_tick && raw == -321 && (int32_t)detail == -123); }

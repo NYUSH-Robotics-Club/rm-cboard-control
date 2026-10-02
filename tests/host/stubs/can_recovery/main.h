@@ -2,7 +2,7 @@
 #ifndef TEST_CAN_RECOVERY_MAIN_H
 #define TEST_CAN_RECOVERY_MAIN_H
 #include <stdint.h>
-typedef struct { volatile uint32_t MCR, MSR, ESR; uint32_t free_slots; } CAN_TypeDef;
+typedef struct { volatile uint32_t MCR, MSR, ESR, TSR; uint32_t free_slots; } CAN_TypeDef;
 typedef struct { CAN_TypeDef *Instance; } CAN_HandleTypeDef;
 typedef struct {
  uint32_t FilterBank, SlaveStartFilterBank, FilterActivation, FilterMode, FilterScale;
@@ -40,6 +40,5 @@ HAL_StatusTypeDef HAL_CAN_AbortTxRequest(CAN_HandleTypeDef *, uint32_t);
 uint32_t HAL_CAN_GetTxMailboxesFreeLevel(CAN_HandleTypeDef *);
 uint32_t HAL_CAN_GetError(CAN_HandleTypeDef *);
 /* The diagnostic method also reads these names; the model has no FIFO. */
-#define TSR free_slots
 #define RF0R free_slots
 #endif

@@ -9,8 +9,8 @@ trap 'rm -rf "$test_build"' EXIT INT TERM
 cc=${CC:-clang}
 common_flags="-std=c11 -Wall -Wextra -Werror"
 
-"$cc" $common_flags -I"$repo_root/tests/host/stubs/can_recovery" -I"$repo_root/bsp/can" \
-  "$repo_root/bsp/can/bsp_can.c" "$repo_root/tests/host/test_can_recovery.c" \
+"$cc" $common_flags -I"$repo_root/tests/host/stubs/can_recovery" -I"$repo_root/bsp/can" -I"$repo_root/core/contracts" -I"$repo_root/bsp/critical" \
+  "$repo_root/bsp/can/bsp_can.c" "$repo_root/bsp/critical/bsp_critical.c" "$repo_root/tests/host/test_can_recovery.c" \
   -o "$test_build/test_can_recovery"
 "$test_build/test_can_recovery"
 

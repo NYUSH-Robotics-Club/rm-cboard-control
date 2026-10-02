@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "motor_trace.h"
 
 typedef enum {
     BSP_CAN_CHANNEL_1 = 1,
@@ -28,6 +29,13 @@ typedef struct {
     bool is_standard_frame;
     bool is_data_frame;
 } BspCanFrame;
+
+/* Configure before CAN starts. One configured DJI yaw is traced; no control changes. */
+void BspCan_TraceConfigure(BspCanChannel channel, uint16_t tx_id, uint16_t rx_id, uint8_t slot);
+void BspCan_TraceCommand(BspCanChannel channel, uint16_t tx_id, uint8_t slot, int16_t raw);
+/* Opaque values decoded by the protocol layer, timestamped at reception. */
+void BspCan_TraceFeedback(BspCanChannel channel, uint16_t rx_id, uint32_t ms, int32_t raw, uint32_t detail);
+void BspCan_TraceRead(MotorTraceBatch *batch);
 
 /* 使用当前板卡的固定过滤器配置启动通道。 */
 bool BspCan_Start(BspCanChannel channel);

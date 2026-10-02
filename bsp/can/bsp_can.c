@@ -4,6 +4,7 @@
  */
 #include "bsp_can.h"
 #include "main.h"
+#include "bsp_critical.h"
 
 #include <string.h>
 
@@ -31,6 +32,100 @@ static CAN_HandleTypeDef *handle_for(BspCanChannel channel)
         return &hcan2;
     }
     return NULL;
+}
+
+#define TRACE_CAPACITY 256U
+static struct {
+    uint32_t channel, tx_id, rx_id, slot, sequence, command_seq, lost;
+    uint32_t head, tail;
+    MotorTraceEvent ring[TRACE_CAPACITY];
+    uint32_t mailbox_seq[3];
+    bool mailbox_active[3];
+} s_trace;
+
+static uint32_t trace_push_at(uint32_t ms, uint32_t kind, int32_t raw, uint32_t detail)
+{
+    BspCriticalState lock = BspCritical_Enter();
+    uint32_t seq = ++s_trace.sequence;
+    if (s_trace.head - s_trace.tail == TRACE_CAPACITY) {
+        ++s_trace.tail;
+        ++s_trace.lost;
+    }
+    s_trace.ring[s_trace.head++ % TRACE_CAPACITY] =
+        (MotorTraceEvent){ms, seq, kind, raw, detail};
+    BspCritical_Exit(lock);
+    return seq;
+}
+
+static uint32_t trace_push(uint32_t kind, int32_t raw, uint32_t detail)
+{
+    return trace_push_at(HAL_GetTick(), kind, raw, detail);
+}
+
+/* Protocol decoding belongs to the caller; preserve its receive timestamp. */
+void BspCan_TraceFeedback(BspCanChannel channel, uint16_t rx_id,
+                          uint32_t ms, int32_t raw, uint32_t detail)
+{
+    if (s_trace.channel == (uint32_t)channel && s_trace.rx_id == rx_id)
+        trace_push_at(ms, MOTOR_TRACE_FEEDBACK, raw, detail);
+}
+
+void BspCan_TraceConfigure(BspCanChannel channel, uint16_t tx_id, uint16_t rx_id, uint8_t slot)
+{
+    if (!handle_for(channel) || slot >= 4U) return;
+    memset(&s_trace, 0, sizeof(s_trace));
+    s_trace.channel = channel; s_trace.tx_id = tx_id;
+    s_trace.rx_id = rx_id; s_trace.slot = slot;
+}
+
+void BspCan_TraceCommand(BspCanChannel channel, uint16_t tx_id, uint8_t slot, int16_t raw)
+{
+    if (s_trace.channel == (uint32_t)channel && s_trace.tx_id == tx_id && s_trace.slot == slot)
+        s_trace.command_seq = trace_push(MOTOR_TRACE_COMMAND, raw, 0U);
+}
+
+/* TX IRQ remains disabled. Observe RQCP/TXOK/ALST/TERR before HAL reuses an
+ * empty mailbox (reuse invalidates its old result). Never clear or alter TSR here.
+ * A completion without a retained result is UNKNOWN, never assumed successful. */
+static void trace_poll(BspCanChannel channel)
+{
+    if (s_trace.channel != (uint32_t)channel) return;
+    uint32_t tsr = handle_for(channel)->Instance->TSR;
+    for (unsigned i = 0U; i < 3U; ++i) {
+        if (!s_trace.mailbox_active[i]) continue;
+        uint32_t bits = (tsr >> (8U * i)) & 15U;
+        if ((bits & 1U) == 0U && (tsr & (1UL << (26U + i))) == 0U) continue;
+        uint32_t kind = MOTOR_TRACE_TX_UNKNOWN;
+        if (bits & 1U) {
+            if (bits & 2U) kind = MOTOR_TRACE_TX_OK;
+            else if (bits & 4U) kind = MOTOR_TRACE_TX_ARB_LOST;
+            else if (bits & 8U) kind = MOTOR_TRACE_TX_ERROR;
+        }
+        trace_push(kind | ((i + 1U) << 8), (int32_t)tsr, s_trace.mailbox_seq[i]);
+        s_trace.mailbox_active[i] = false;
+    }
+}
+
+void BspCan_TraceRead(MotorTraceBatch *batch)
+{
+    memset(batch, 0, sizeof(*batch));
+    if (!s_trace.channel) return;
+    trace_poll((BspCanChannel)s_trace.channel);
+    batch->channel = s_trace.channel; batch->tx_id = s_trace.tx_id;
+    batch->rx_id = s_trace.rx_id; batch->slot = s_trace.slot;
+    /* Bound interrupt masking to one event, not a whole telemetry packet. */
+    for (unsigned i = 0U; i < MOTOR_TRACE_BATCH; ++i) {
+        BspCriticalState lock = BspCritical_Enter();
+        if (s_trace.tail == s_trace.head) { BspCritical_Exit(lock); break; }
+        batch->events[batch->count++] = s_trace.ring[s_trace.tail++ % TRACE_CAPACITY];
+        BspCritical_Exit(lock);
+    }
+    batch->lost = s_trace.lost;
+    CAN_HandleTypeDef *handle = handle_for((BspCanChannel)s_trace.channel);
+    batch->esr = handle->Instance->ESR;
+    batch->tsr = handle->Instance->TSR;
+    batch->hal_error = HAL_CAN_GetError(handle);
+    batch->free_mailboxes = HAL_CAN_GetTxMailboxesFreeLevel(handle);
 }
 
 bool BspCan_Start(BspCanChannel channel)
@@ -217,7 +312,7 @@ bool BspCan_Read(BspCanChannel channel, BspCanFrame *frame)
     return true;
 }
 
-bool BspCan_Write(BspCanChannel channel,
+static bool write_frame(BspCanChannel channel,
                   uint16_t standard_id,
                   const uint8_t *data,
                   uint8_t length)
@@ -249,7 +344,37 @@ bool BspCan_Write(BspCanChannel channel,
     if (length > 0U) {
         memcpy(frame_data, data, length);
     }
-    return HAL_CAN_AddTxMessage(handle, &header, frame_data, &mailbox) == HAL_OK;
+    trace_poll(channel);
+    bool ok = HAL_CAN_AddTxMessage(handle, &header, frame_data, &mailbox) == HAL_OK;
+    if (ok && s_trace.channel == (uint32_t)channel) {
+        for (unsigned i = 0U; i < 3U; ++i) if (mailbox == (1UL << i)) {
+            uint32_t mailbox_tag = (i + 1U) << 8;
+            /* Completion can race the pre-submit poll, including reuse by a
+             * non-yaw frame. Never attribute that new frame's result to yaw. */
+            if (s_trace.mailbox_active[i]) {
+                trace_push(MOTOR_TRACE_TX_UNKNOWN | mailbox_tag, 0, s_trace.mailbox_seq[i]);
+                s_trace.mailbox_active[i] = false;
+            }
+            if (standard_id == s_trace.tx_id && length == 8U) {
+                unsigned slot = s_trace.slot * 2U;
+                int16_t raw = (int16_t)((uint16_t)data[slot] << 8 | data[slot + 1U]);
+                s_trace.mailbox_seq[i] = trace_push(MOTOR_TRACE_SUBMIT | mailbox_tag, raw, s_trace.command_seq);
+                s_trace.mailbox_active[i] = true;
+            }
+        }
+    }
+    return ok;
+}
+
+bool BspCan_Write(BspCanChannel channel, uint16_t standard_id, const uint8_t *data, uint8_t length)
+{
+    bool ok = write_frame(channel, standard_id, data, length);
+    if (!ok && s_trace.channel == (uint32_t)channel && standard_id == s_trace.tx_id && data && length == 8U) {
+        unsigned slot = s_trace.slot * 2U;
+        int16_t raw = (int16_t)((uint16_t)data[slot] << 8 | data[slot + 1U]);
+        trace_push(MOTOR_TRACE_REJECT, raw, s_trace.command_seq);
+    }
+    return ok;
 }
 
 bool BspCan_MatchesNativeHandle(BspCanChannel channel, const void *native_handle)

@@ -412,6 +412,7 @@
         9: 412,
         10: 444,
         11: 552,
+        12: 1552,
       };
 
       // Match firmware modules/algorithm/crc16.c (table starts with 0x0000, 0x1189, ...)
@@ -1656,6 +1657,16 @@
                 latest.pitch_pid_dt_s = readF32();
               }
 
+              if (version >= 12) {
+                const names = ["channel", "tx_id", "rx_id", "slot", "count", "lost", "esr", "tsr", "hal_error", "free_mailboxes"];
+                for (const name of names) latest["yaw_transport_" + name] = readU32();
+                latest.yaw_transport_events = [];
+                for (let i = 0; i < 48; i++) {
+                  const event = {ms: readU32(), seq: readU32(), kind: readU32(), raw: readI32(), detail: readU32()};
+                  if (i < latest.yaw_transport_count) latest.yaw_transport_events.push(event);
+                }
+              }
+
               if ((store.lastSeq !== null && seq < store.lastSeq) ||
                   (store.lastTimestampMs !== null &&
                    latest.timestamp_ms < store.lastTimestampMs)) {
@@ -1931,6 +1942,8 @@
               { name: "pitch_inner_gains", value: `${fmtMaybe(latest.pitch_inner_kp)} / ${fmtMaybe(latest.pitch_inner_ki)} / ${fmtMaybe(latest.pitch_inner_kd)}` },
               { name: "pitch_inner_limits", value: `${fmtMaybe(latest.pitch_inner_output_max)} / ${fmtMaybe(latest.pitch_inner_integral_max)}` },
               { name: "pitch_pid_dt_s", value: fmtMaybe(latest.pitch_pid_dt_s, 6) },
+              ...["channel", "tx_id", "rx_id", "slot", "count", "lost", "esr", "tsr", "hal_error", "free_mailboxes"].map(name =>
+                ({name: "yaw_transport_" + name, value: latest["yaw_transport_" + name] ?? "—"})),
             ]
           : [];
 

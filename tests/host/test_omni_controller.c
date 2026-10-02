@@ -243,3 +243,11 @@ int main(void)
     puts("omni controller and CAN1 wheel slot integration: PASS");
     return 0;
 }
+
+void BspCan_TraceConfigure(BspCanChannel c, uint16_t tx, uint16_t rx, uint8_t slot)
+{ (void)c; (void)tx; (void)rx; (void)slot; }
+void BspCan_TraceCommand(BspCanChannel c, uint16_t tx, uint8_t slot, int16_t raw)
+{ (void)c; (void)tx; (void)slot; (void)raw; }
+
+void BspCan_TraceFeedback(BspCanChannel c, uint16_t id, uint32_t ms, int32_t raw, uint32_t detail)
+{ (void)c; (void)id; (void)ms; (void)raw; (void)detail; }

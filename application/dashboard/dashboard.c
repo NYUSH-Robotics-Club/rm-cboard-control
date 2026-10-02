@@ -19,8 +19,8 @@
 #include <stdatomic.h>
 #include <string.h>
 
-_Static_assert(sizeof(DashboardPayload) == 552U, "dashboard v11 payload ABI");
-_Static_assert(sizeof(DashboardFrame) == 562U, "dashboard v11 frame ABI");
+_Static_assert(sizeof(DashboardPayload) == 1552U, "dashboard v12 payload ABI");
+_Static_assert(sizeof(DashboardFrame) == 1562U, "dashboard v12 frame ABI");
 _Static_assert(offsetof(DashboardPayload, yaw_diag_valid) == 300U, "preserve v8 prefix");
 
 static uint8_t s_initialized;
@@ -151,7 +151,8 @@ static void fill_sources(DashboardPayload *p, uint32_t now) {
 }
 
 void Dashboard_Step(void) {
-  DashboardFrame frame = {0};
+  static DashboardFrame frame; /* Single control-task owner; keep batch off its stack. */
+  memset(&frame, 0, sizeof(frame));
   GimbalMonitorSnapshot monitor = {0};
   if (!s_initialized) Dashboard_Init();
   if (!s_initialized || !copy_monitor(&monitor)) return;
@@ -159,7 +160,7 @@ void Dashboard_Step(void) {
   frame.version = DASHBOARD_FRAME_VERSION;
   frame.payload_len = (uint8_t)sizeof(DashboardPayload); /* 协议保留长度低8位，按版本取完整长度。 */
   frame.seq = s_sequence++;
-  frame.payload = (DashboardPayload){
+  static const DashboardPayload empty_payload = {
     .chassis_power = NAN,
     .chassis_volt = NAN,
     .chassis_power_budget_w = NAN,
@@ -216,6 +217,7 @@ void Dashboard_Step(void) {
     .pitch_inner_kp = NAN, .pitch_inner_ki = NAN, .pitch_inner_kd = NAN,
     .pitch_inner_output_max = NAN, .pitch_inner_integral_max = NAN, .pitch_pid_dt_s = NAN,
   };
+  frame.payload = empty_payload;
   DashboardPayload *p = &frame.payload;
   const uint32_t now = BspTime_NowMs();
   p->timestamp_ms = now;
@@ -332,6 +334,7 @@ void Dashboard_Step(void) {
       p->yaw_pid_output = monitor.yaw_pid_output;
     }
   }
+  MotorService_ReadTrace(&p->yaw_transport);
   p->telemetry_drop_count = s_drop_count;
   frame.crc16 = dashboard_crc16((const uint8_t *)&frame, (uint16_t)(sizeof(frame) - sizeof(frame.crc16)));
   if (SEGGER_RTT_Write(DASHBOARD_RTT_CHANNEL, &frame, sizeof(frame)) != sizeof(frame)) s_drop_count++;

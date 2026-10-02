@@ -10,6 +10,7 @@
 #include "config_types.h"
 #include "can_messages.h"
 #include "robot_status.h"
+#include "motor_trace.h"
 
 typedef struct {
     uint8_t motor_id;
@@ -38,6 +39,7 @@ typedef struct MotorAdapterOps {
     void (*on_can_frame)(const CanRxFrame *frame);
     void (*reset_control)(uint8_t motor_id);
     void (*flush)(void);
+    void (*read_trace)(MotorTraceBatch *batch); /* Optional, task-context diagnostic drain. */
 } MotorAdapterOps;
 
 const MotorAdapterOps *MotorAdapter_Get(MotorVendor_e vendor);

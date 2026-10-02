@@ -6,6 +6,7 @@
 #include "message_center.h"
 #include "robot_config.h"
 #include <stddef.h>
+#include <string.h>
 
 static bool s_mode_override_valid[16];
 static MotorControlMode_e s_mode_override[16];
@@ -320,4 +321,12 @@ void MotorService_Flush(void)
             adapter->flush();
         }
     }
+}
+
+/* Diagnostics do not issue commands or alter adapter control state. */
+void MotorService_ReadTrace(MotorTraceBatch *batch)
+{
+    const MotorAdapterOps *adapter = DjiMotorAdapter_Get();
+    memset(batch, 0, sizeof(*batch));
+    if (adapter && adapter->read_trace) adapter->read_trace(batch);
 }

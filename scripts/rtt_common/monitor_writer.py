@@ -11,6 +11,7 @@ from typing import Iterable
 
 from scripts.rtt_common.telemetry import (
     PITCH_DIAGNOSTIC_FIELDS,
+    TRACE_METADATA_FIELDS,
     TelemetryFrame,
     YAW_DIAGNOSTIC_FIELDS,
 )
@@ -104,7 +105,7 @@ MONITOR_COLUMNS = (
     "chassis_current_actual_raw_0", "chassis_current_actual_raw_1", "chassis_current_actual_raw_2", "chassis_current_actual_raw_3",
     "rc_rocker_r_x", "rc_rocker_r_y", "rc_rocker_l_x", "rc_rocker_l_y", "rc_dial", "rc_switches",
     "gimbal_yaw_encoder_raw", "telemetry_drop_count",
-) + YAW_DIAGNOSTIC_FIELDS + ("yaw_rc_age_ms", "yaw_command_age_ms", "yaw_feedback_age_ms") + PITCH_DIAGNOSTIC_FIELDS
+) + YAW_DIAGNOSTIC_FIELDS + ("yaw_rc_age_ms", "yaw_command_age_ms", "yaw_feedback_age_ms") + PITCH_DIAGNOSTIC_FIELDS + TRACE_METADATA_FIELDS
 
 
 def resolve_monitor_dir(path: str | Path) -> Path:
@@ -231,7 +232,7 @@ def _frame_row_values(frame: TelemetryFrame) -> tuple[object, ...]:
         _age_ms(frame.yaw_sample_ms, frame.yaw_rc_dispatch_ms),
         _age_ms(frame.yaw_sample_ms, frame.yaw_route_ms),
         _age_ms(frame.yaw_sample_ms, frame.yaw_feedback_ms),
-    ) + tuple(getattr(frame, name) for name in PITCH_DIAGNOSTIC_FIELDS)
+    ) + tuple(getattr(frame, name) for name in PITCH_DIAGNOSTIC_FIELDS) + tuple(getattr(frame, name) for name in TRACE_METADATA_FIELDS)
 
 
 class MonitorWriter:
@@ -240,6 +241,9 @@ class MonitorWriter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open("w", encoding="utf-8", buffering=1)
         self._handle.write("\t".join(MONITOR_COLUMNS) + "\n")
+        self.trace_path = self.path.with_suffix(".yaw_transport.tsv")
+        self._trace_handle = self.trace_path.open("w", encoding="utf-8", buffering=1)
+        self._trace_handle.write("host_rx_ms\tframe_seq\tchannel\ttx_id\trx_id\tslot\tlost\tms\tevent_seq\tkind\tmailbox\traw\tdetail\n")
 
     @classmethod
     def create(cls, directory: str | Path = DEFAULT_MONITOR_DIR, prefix: str = "logger") -> "MonitorWriter":
@@ -248,6 +252,16 @@ class MonitorWriter:
     def write_frames(self, frames: Iterable[TelemetryFrame]) -> None:
         lines = []
         for frame in frames:
+            if frame.yaw_transport_events:
+                prefix = (frame.host_rx_ms, frame.seq, frame.yaw_transport_channel, frame.yaw_transport_tx_id,
+                          frame.yaw_transport_rx_id, frame.yaw_transport_slot, frame.yaw_transport_lost)
+                event_lines = []
+                for ms, seq, tagged_kind, raw, detail in frame.yaw_transport_events:
+                    kind = tagged_kind & 255
+                    mailbox = ((tagged_kind >> 8) & 3) - 1
+                    row = prefix + (ms, seq, kind, mailbox, raw, detail)
+                    event_lines.append("\t".join(str(value) for value in row))
+                self._trace_handle.write("\n".join(event_lines) + "\n")
             values = _frame_row_values(frame)
             lines.append("\t".join(_format_value(value) for value in values))
         if not lines:
@@ -256,3 +270,4 @@ class MonitorWriter:
 
     def close(self) -> None:
         self._handle.close()
+        self._trace_handle.close()

@@ -1,15 +1,16 @@
-/* 将应用诊断打包为RTT遥测。版本11保留版本10前缀，并附带pitch PID诊断。
+/* 将应用诊断打包为RTT遥测。版本12保留版本11前缀，并批量附带yaw传输事件。
  * 浮点NaN表示未接入、过期或未启用的测量/目标，不能画成零值。只观察，不改变控制。
  */
 #ifndef RM_DASHBOARD_H
 #define RM_DASHBOARD_H
 
 #include <stdint.h>
+#include "motor_trace.h"
 
 #define DASHBOARD_RTT_CHANNEL 1U
-#define DASHBOARD_RTT_BUFFER_SIZE 2048U
+#define DASHBOARD_RTT_BUFFER_SIZE 8192U
 #define DASHBOARD_FRAME_MAGIC 0x4452U
-#define DASHBOARD_FRAME_VERSION 11U
+#define DASHBOARD_FRAME_VERSION 12U
 
 enum {
   DASHBOARD_CAN = 1U,      /* CAN位表示该总线有配置电机在100ms内反馈，不代表总线无错误。 */
@@ -77,6 +78,7 @@ typedef struct {
   float pitch_outer_kp, pitch_outer_ki, pitch_outer_kd, pitch_outer_output_max, pitch_outer_integral_max;
   float pitch_inner_kp, pitch_inner_ki, pitch_inner_kd, pitch_inner_output_max, pitch_inner_integral_max;
   float pitch_pid_dt_s;
+  MotorTraceBatch yaw_transport; /* v12: independent timestamped events, not one callback. */
 } DashboardPayload;
 typedef struct { uint16_t magic; uint8_t version, payload_len; uint32_t seq; DashboardPayload payload; uint16_t crc16; } DashboardFrame;
 #pragma pack(pop)

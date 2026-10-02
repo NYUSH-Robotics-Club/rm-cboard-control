@@ -4,6 +4,7 @@
  */
 #include "motor_adapter.h"
 #include "motor_driver.h"
+#include "bsp_can.h"
 #include "dji_motor_protocol.h"
 #include <stddef.h>
 
@@ -153,7 +154,8 @@ const MotorAdapterOps *DjiMotorAdapter_Get(void)
         .snapshot = dji_snapshot,
         .on_can_frame = 0,
         .reset_control = dji_reset_control,
-        .flush = dji_flush
+        .flush = dji_flush,
+        .read_trace = BspCan_TraceRead
     };
     return &ops;
 }

@@ -98,7 +98,7 @@ int main(void) {
         .pitch = {.flags = 31, .position_actual_ticks = 2048, .position_target_ticks = 1024,
             .speed_actual_rpm = -2, .speed_target_rpm = -3, .encoder_raw = 2048}};
     Dashboard_Step();
-    assert(captured.version == 11 && captured.payload_len == (552 & 255));
+    assert(captured.version == 12 && captured.payload_len == (1552 & 255));
     assert(captured.payload.yaw_diag_valid == 1 && captured.payload.yaw_rc_ch0 == -660);
     assert(captured.payload.yaw_rc_sequence == 17 && captured.payload.yaw_route_sequence == 122);
     assert(captured.payload.yaw_command_raw == 321 && captured.payload.yaw_current_actual_raw == -1234);
@@ -147,4 +147,10 @@ int main(void) {
     assert(captured.payload.gimbal_yaw_target_deg_s == -24);
     assert(isnan(captured.payload.gimbal_yaw_target_deg)); emit();
     return 0;
+}
+
+void MotorService_ReadTrace(MotorTraceBatch *b)
+{
+    *b = (MotorTraceBatch){.channel=1, .tx_id=0x2fe, .rx_id=0x209, .slot=0, .count=2, .lost=7,
+        .events={{123, 44, MOTOR_TRACE_SUBMIT | 256, -12000, 43}, {127, 45, MOTOR_TRACE_TX_ARB_LOST | 256, 5, 44}}};
 }

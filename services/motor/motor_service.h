@@ -57,4 +57,6 @@ bool MotorService_IsVendorImplemented(MotorVendor_e vendor);
 const char *MotorService_VendorName(MotorVendor_e vendor);
 void MotorService_Flush(void);
 
+void MotorService_ReadTrace(MotorTraceBatch *batch);
+
 #endif

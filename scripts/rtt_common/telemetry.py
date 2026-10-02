@@ -8,8 +8,8 @@ from typing import Dict, List
 
 MAGIC = 0x4452
 MAGIC_ALT = 0x5244
-CURRENT_VERSION = 11
-SUPPORTED_VERSIONS = (3, 4, 5, 6, 7, 8, 9, 10, 11)
+CURRENT_VERSION = 12
+SUPPORTED_VERSIONS = (3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
 
 HEADER_STRUCT = struct.Struct("<HBBI")
 PAYLOAD_STRUCT_V3 = struct.Struct("<Iff4f4f3f3f11f10B8h2BH8BII7fBHBB15fH")
@@ -28,6 +28,13 @@ PAYLOAD_STRUCT_V10 = struct.Struct(PAYLOAD_STRUCT_V9.format + "8f")
 # v11 appends pitch command, feedback and both PID-loop diagnostics to v10.
 PITCH_DIAGNOSTICS = struct.Struct("<6I21f")
 PAYLOAD_STRUCT_V11 = struct.Struct(PAYLOAD_STRUCT_V10.format + PITCH_DIAGNOSTICS.format[1:])
+TRACE_BATCH_SIZE = 48
+TRACE_METADATA_FIELDS = ("yaw_transport_channel", "yaw_transport_tx_id", "yaw_transport_rx_id",
+    "yaw_transport_slot", "yaw_transport_count", "yaw_transport_lost", "yaw_transport_esr",
+    "yaw_transport_tsr", "yaw_transport_hal_error", "yaw_transport_free_mailboxes")
+TRACE_METADATA = struct.Struct("<10I")
+TRACE_EVENT = struct.Struct("<IIIiI")
+PAYLOAD_STRUCT_V12 = struct.Struct(PAYLOAD_STRUCT_V11.format + "10I" + "IIIiI" * TRACE_BATCH_SIZE)
 PITCH_DIAGNOSTIC_FIELDS = (
     "pitch_diag_valid", "pitch_feedback_ms", "pitch_command_unit", "pitch_command_status",
     "pitch_command_raw", "pitch_current_actual_raw", "pitch_speed_target_rpm", "pitch_speed_actual_rpm",
@@ -78,6 +85,7 @@ PAYLOAD_STRUCTS: Dict[int, struct.Struct] = {
     9: PAYLOAD_STRUCT_V9,
     10: PAYLOAD_STRUCT_V10,
     11: PAYLOAD_STRUCT_V11,
+    12: PAYLOAD_STRUCT_V12,
 }
 PAYLOAD_SIZES = {version: payload_struct.size for version, payload_struct in PAYLOAD_STRUCTS.items()}
 PAYLOAD_SIZE = PAYLOAD_SIZES[CURRENT_VERSION]
@@ -279,6 +287,17 @@ class TelemetryFrame:
     pitch_inner_output_max: int | float = float("nan")
     pitch_inner_integral_max: int | float = float("nan")
     pitch_pid_dt_s: int | float = float("nan")
+    yaw_transport_channel: int | float = float("nan")
+    yaw_transport_tx_id: int | float = float("nan")
+    yaw_transport_rx_id: int | float = float("nan")
+    yaw_transport_slot: int | float = float("nan")
+    yaw_transport_count: int | float = float("nan")
+    yaw_transport_lost: int | float = float("nan")
+    yaw_transport_esr: int | float = float("nan")
+    yaw_transport_tsr: int | float = float("nan")
+    yaw_transport_hal_error: int | float = float("nan")
+    yaw_transport_free_mailboxes: int | float = float("nan")
+    yaw_transport_events: list = dataclasses.field(default_factory=list)
 
 
 
@@ -1436,6 +1455,14 @@ class FrameParser:
                         values[index] = struct.unpack("<i", struct.pack("<I", values[index]))[0]
                     for name, value in zip(PITCH_DIAGNOSTIC_FIELDS, values):
                         setattr(frame, name, value)
+                if version >= 12:
+                    offset = HEADER_STRUCT.size + PAYLOAD_STRUCT_V11.size
+                    values = TRACE_METADATA.unpack_from(raw, offset)
+                    for name, value in zip(TRACE_METADATA_FIELDS, values):
+                        setattr(frame, name, value)
+                    offset += TRACE_METADATA.size
+                    frame.yaw_transport_events = [TRACE_EVENT.unpack_from(raw, offset + i * TRACE_EVENT.size)
+                        for i in range(min(frame.yaw_transport_count, TRACE_BATCH_SIZE))]
                 frames.append(frame)
             elif version == 7:
                 frames.append(self._parse_v7(raw, version, seq, host_rx_ms))

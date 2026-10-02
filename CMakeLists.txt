@@ -182,6 +182,7 @@ add_library(bsp STATIC
 )
 
 target_include_directories(bsp PUBLIC
+    core/contracts # Passive diagnostic records, no upper-layer implementation dependency.
     bsp/can
     bsp/alarm
     bsp/critical
