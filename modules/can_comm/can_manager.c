@@ -307,23 +307,31 @@ HAL_StatusTypeDef CAN_Manager_FlushTx(CAN_Manager_t *manager)
             }
 
             BspCanChannel channel;
-            HAL_StatusTypeDef status =
-                to_bsp_channel(manager->channel, &channel) &&
-                        BspCan_Write(channel, tx_frame->std_id, data, sizeof(data))
-                    ? HAL_OK
-                    : HAL_ERROR;
-            if (status == HAL_OK) {
-                manager->tx_ok++;
+            BspCanTxResult status = to_bsp_channel(manager->channel, &channel)
+                ? BspCan_TryWrite(channel, tx_frame->std_id, data, sizeof(data))
+                : BSP_CAN_TX_ERROR;
+            if (status == BSP_CAN_TX_ACCEPTED) {
+                manager->tx_ok++; /* Mailbox accepted, not necessarily transmitted. */
+                manager->last_tx_time = BspTime_NowMs();
+                memset(tx_frame->currents, 0, sizeof(tx_frame->currents));
+                tx_frame->pending = 0;
+            } else if (status == BSP_CAN_TX_BUSY) {
+                manager->tx_busy++;
+                if (result == HAL_OK) result = HAL_BUSY;
             } else {
                 manager->tx_err++;
-                result = HAL_ERROR;  // Mark as error but continue sending other frames
+                result = HAL_ERROR;
             }
-            manager->last_tx_time = BspTime_NowMs();
-
-            // Clear frame for next cycle
-            memset(tx_frame->currents, 0, sizeof(tx_frame->currents));
-            tx_frame->pending = 0;
+            /* BUSY/error retains one latest value per slot. New commands replace
+             * it before the next flush; never append historical setpoints. */
         }
+    }
+
+    /* A write can discover bus-off and disarm both buses midway through this
+     * flush. Purge retained nonzero values immediately, not only on entry. */
+    if (!BspCan_OutputsArmed()) {
+        for (uint8_t i = 0U; i < CAN_TX_FRAME_COUNT; ++i)
+            memset(manager->tx_frames[i].currents, 0, sizeof(manager->tx_frames[i].currents));
     }
 
     return result;

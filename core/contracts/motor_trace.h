@@ -8,7 +8,7 @@
 #define MOTOR_TRACE_BATCH 48U
 enum { MOTOR_TRACE_COMMAND=1, MOTOR_TRACE_SUBMIT, MOTOR_TRACE_TX_OK,
        MOTOR_TRACE_TX_ARB_LOST, MOTOR_TRACE_TX_ERROR, MOTOR_TRACE_FEEDBACK,
-       MOTOR_TRACE_REJECT, MOTOR_TRACE_TX_UNKNOWN };
+       MOTOR_TRACE_REJECT, MOTOR_TRACE_TX_UNKNOWN, MOTOR_TRACE_DEFER };
 typedef struct {
     uint32_t ms, seq, kind; /* kind low8=event; bits8..9=mailbox+1, 0=not applicable */
     int32_t raw; /* command/current counts; result events carry raw TSR bits */

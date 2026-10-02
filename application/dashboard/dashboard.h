@@ -87,4 +87,6 @@ typedef struct { uint16_t magic; uint8_t version, payload_len; uint32_t seq; Das
 void Dashboard_Init(void);
 /* 主循环读取最新应用状态，写一帧；缓冲区满则丢弃本帧并计数，不阻塞控制。 */
 void Dashboard_Step(void);
+/* Single control-task owner, called only after dispatch/flush. No catch-up burst. */
+void Dashboard_Task(uint32_t now_ms);
 #endif

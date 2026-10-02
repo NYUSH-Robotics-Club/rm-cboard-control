@@ -4,7 +4,6 @@
  */
 #include "gimbal_controller.h"
 #include "gimbal_monitor.h"
-#include "dashboard.h"
 #include "yaw_reference.h"
 #include "message_center.h"
 #include "motor_driver.h"
@@ -926,11 +925,6 @@ static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
   g_gimbal_monitor = next;
   atomic_signal_fence(memory_order_seq_cst);
   g_gimbal_monitor.sequence = odd + 1U;
-  static uint32_t dashboard_tick_ms;
-  if ((uint32_t)(now - dashboard_tick_ms) >= 20U) {
-    dashboard_tick_ms = now;
-    Dashboard_Step();
-  }
 }
 
 static void on_imu_update(const MsgEvent *ev, void *user) {

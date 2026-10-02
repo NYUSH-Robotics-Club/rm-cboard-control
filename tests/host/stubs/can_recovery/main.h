@@ -38,6 +38,7 @@ HAL_StatusTypeDef HAL_CAN_GetRxMessage(CAN_HandleTypeDef *, uint32_t, CAN_RxHead
 HAL_StatusTypeDef HAL_CAN_AddTxMessage(CAN_HandleTypeDef *, CAN_TxHeaderTypeDef *, uint8_t *, uint32_t *);
 HAL_StatusTypeDef HAL_CAN_AbortTxRequest(CAN_HandleTypeDef *, uint32_t);
 uint32_t HAL_CAN_GetTxMailboxesFreeLevel(CAN_HandleTypeDef *);
+uint32_t HAL_CAN_IsTxMessagePending(const CAN_HandleTypeDef *, uint32_t);
 uint32_t HAL_CAN_GetError(CAN_HandleTypeDef *);
 /* The diagnostic method also reads these names; the model has no FIFO. */
 #define RF0R free_slots

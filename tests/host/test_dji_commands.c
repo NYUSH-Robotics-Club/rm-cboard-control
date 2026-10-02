@@ -16,6 +16,8 @@ static CAN_HandleTypeDef handles[2];
 static MotorRegistry_t registries[2];
 static MotorContext_t contexts[16];
 static unsigned count;
+static BspCanTxResult submit_result = BSP_CAN_TX_ACCEPTED;
+static bool armed = true, disarm_on_submit;
 static struct { BspCanChannel bus; uint16_t id; uint8_t data[8]; } frames[32];
 static BspCanFrame received_frame;
 static bool frame_ready;
@@ -25,7 +27,7 @@ static uint32_t receive_tick = 100;
 uint32_t BspTime_NowMs(void) { return receive_tick; }
 uint32_t BspTime_NowUs(void) { return 100000; }
 bool BspCan_Start(BspCanChannel c) { (void)c; return true; }
-bool BspCan_OutputsArmed(void) { return true; }
+bool BspCan_OutputsArmed(void) { return armed; }
 bool BspCan_Read(BspCanChannel c, BspCanFrame *f) {
     (void)c;
     if (!frame_ready) return false;
@@ -141,6 +143,47 @@ static void test_receive_overload(const RobotConfig_t *robot)
     assert(CAN_Manager_Init(&can1_manager, CAN_CHANNEL_1, &handles[0], robot, &registries[0]) == HAL_OK);
 }
 
+static void test_latest_pending(const RobotConfig_t *robot) {
+ assert(CAN_Manager_Init(&can1_manager,CAN_CHANNEL_1,&handles[0],robot,&registries[0])==HAL_OK);
+ count=0; submit_result=BSP_CAN_TX_BUSY;
+ assert(CAN_Manager_SendMotorCurrent(&can1_manager,5,100)==HAL_OK);
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_BUSY);
+ assert(CAN_Manager_SendMotorCurrent(&can1_manager,5,200)==HAL_OK);
+ assert(CAN_Manager_SendMotorCurrent(&can1_manager,5,-300)==HAL_OK);
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_BUSY);
+ assert(count==0 && can1_manager.tx_busy==2 && can1_manager.tx_err==0);
+ submit_result=BSP_CAN_TX_ACCEPTED;
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK);
+ expect(0,BSP_CAN_CHANNEL_1,0x2fe,0,-300);
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK && count==1);
+ submit_result=BSP_CAN_TX_ERROR;
+ assert(CAN_Manager_SendMotorCurrent(&can1_manager,5,400)==HAL_OK);
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_ERROR);
+ assert(CAN_Manager_SendMotorCurrent(&can1_manager,5,500)==HAL_OK);
+ submit_result=BSP_CAN_TX_ACCEPTED;
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK);
+ expect(1,BSP_CAN_CHANNEL_1,0x2fe,0,500);
+ /* Partial updates during BUSY preserve all latest slots of the shared frame. */
+ submit_result=BSP_CAN_TX_BUSY;
+ assert(CAN_Manager_SendMotorCurrent(&can1_manager,1,111)==HAL_OK);
+ assert(CAN_Manager_SendMotorCurrent(&can1_manager,2,222)==HAL_OK);
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_BUSY);
+ assert(CAN_Manager_SendMotorCurrent(&can1_manager,1,333)==HAL_OK);
+ submit_result=BSP_CAN_TX_ACCEPTED;
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK);
+ assert(frames[2].id==0x200 && frames[2].data[0]==1 && frames[2].data[1]==77);
+ assert(frames[2].data[2]==0 && frames[2].data[3]==222);
+ /* A fault discovered inside submission cannot retain a nonzero retry. */
+ assert(CAN_Manager_SendMotorCurrent(&can1_manager,5,999)==HAL_OK);
+ disarm_on_submit=true;
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_ERROR);
+ disarm_on_submit=false; armed=true;
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK);
+ expect(3,BSP_CAN_CHANNEL_1,0x2fe,0,0);
+ count=0;
+ puts("DJI latest pending: PASS (busy/error retry, overwrite, shared slots, fault purge)");
+}
+
 int main(void)
 {
     const RobotConfig_t *robot = RobotConfig_Get();
@@ -153,6 +196,7 @@ int main(void)
     assert(CAN_Manager_Init(&can1_manager, CAN_CHANNEL_1, &handles[0], robot, &registries[0]) == HAL_OK);
     assert(CAN_Manager_Init(&can2_manager, CAN_CHANNEL_2, &handles[1], robot, &registries[1]) == HAL_OK);
     test_receive_overload(robot);
+    test_latest_pending(robot);
     assert(adapter->command_current(5, 30000) == ROBOT_STATUS_OK);
     assert(adapter->command_current(8, -30000) == ROBOT_STATUS_OK);
     adapter->flush();
@@ -216,3 +260,10 @@ void BspCan_TraceRead(MotorTraceBatch *b) { memset(b, 0, sizeof(*b)); }
 
 void BspCan_TraceFeedback(BspCanChannel c, uint16_t id, uint32_t ms, int32_t raw, uint32_t detail)
 { (void)c; (void)id; assert(ms == receive_tick && raw == -321 && (int32_t)detail == -123); }
+
+BspCanTxResult BspCan_TryWrite(BspCanChannel c, uint16_t id, const uint8_t *d, uint8_t n)
+{
+ if (disarm_on_submit) { armed=false; return BSP_CAN_TX_ERROR; }
+ if (submit_result != BSP_CAN_TX_ACCEPTED) return submit_result;
+ return BspCan_Write(c,id,d,n) ? BSP_CAN_TX_ACCEPTED : BSP_CAN_TX_ERROR;
+}

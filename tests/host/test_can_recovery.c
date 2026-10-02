@@ -10,6 +10,17 @@ static uint32_t now_ms, aborts, writes;
 static int abort_completes=1;
 static int tx_fails, rx_ready;
 static unsigned chosen_mailbox;
+static bool pending_model;
+static uint32_t pending_masks[2];
+static unsigned bus_index(const CAN_HandleTypeDef *h) { return h == &hcan1 ? 0U : 1U; }
+uint32_t HAL_CAN_IsTxMessagePending(const CAN_HandleTypeDef *h, uint32_t m)
+{ return pending_model && (pending_masks[bus_index(h)] & m) != 0U; }
+static void finish_mailbox(CAN_HandleTypeDef *h, unsigned i)
+{
+ pending_masks[bus_index(h)] &= ~(1U << i);
+ h->Instance->TSR |= (3U << (8U*i)) | (1U << (26U+i));
+ h->Instance->free_slots++;
+}
 
 uint32_t HAL_GetTick(void) { return now_ms; }
 HAL_StatusTypeDef HAL_CAN_ConfigFilter(CAN_HandleTypeDef *h,CAN_FilterTypeDef *f)
@@ -26,10 +37,24 @@ HAL_StatusTypeDef HAL_CAN_AddTxMessage(CAN_HandleTypeDef *h,CAN_TxHeaderTypeDef 
 {(void)t;(void)d;
  if(tx_fails)return HAL_ERROR;
  *m=1U<<chosen_mailbox;writes++;
+ if (pending_model) {
+  assert(!(pending_masks[bus_index(h)] & *m));
+  pending_masks[bus_index(h)] |= *m; h->Instance->free_slots--;
+ }
  h->Instance->TSR &= ~((15U << (8U*chosen_mailbox)) | (1U << (26U+chosen_mailbox)));
  return HAL_OK;}
 HAL_StatusTypeDef HAL_CAN_AbortTxRequest(CAN_HandleTypeDef *h,uint32_t m)
-{assert(m==7U);aborts++;if(abort_completes)h->Instance->free_slots=3;return HAL_OK;}
+{
+ if (!pending_model) assert(m==7U);
+ aborts++;
+ if(abort_completes) {
+  if(pending_model) {
+   for(unsigned i=0;i<3;++i) if((m & (1U<<i)) && (pending_masks[bus_index(h)] & (1U<<i)))
+    finish_mailbox(h,i);
+  } else h->Instance->free_slots=3;
+ }
+ return HAL_OK;
+}
 uint32_t HAL_CAN_GetTxMailboxesFreeLevel(CAN_HandleTypeDef *h){return h->Instance->free_slots;}
 uint32_t HAL_CAN_GetError(CAN_HandleTypeDef *h){(void)h;return 0;}
 static void test_trace(void) {
@@ -89,8 +114,49 @@ static void test_trace(void) {
  puts("CAN trace: PASS (all mailboxes, result linkage, reject, unknown, signed feedback, overflow)");
 }
 
+static void test_single_flight(void) {
+ assert(BspCan_Start(BSP_CAN_CHANNEL_1)&&BspCan_Start(BSP_CAN_CHANNEL_2));
+ BspCan_Service(0); assert(BspCan_TryArm(500));
+ pending_model=true; memset(pending_masks,0,sizeof(pending_masks));
+ BspCan_TraceConfigure(BSP_CAN_CHANNEL_1,0x2fe,0x209,0);
+ uint8_t data[8]={1,2}, zero[8]={0};
+ chosen_mailbox=0;
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x2fe,data,8)==BSP_CAN_TX_ACCEPTED);
+ chosen_mailbox=1;
+ unsigned before=writes;
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x2fe,data,8)==BSP_CAN_TX_BUSY);
+ assert(writes==before && pending_masks[0]==1);
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x200,data,8)==BSP_CAN_TX_ACCEPTED);
+ chosen_mailbox=2;
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x1ff,data,8)==BSP_CAN_TX_ACCEPTED);
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x2ff,data,8)==BSP_CAN_TX_BUSY);
+ /* Same ID on another bus is independent. */
+ chosen_mailbox=0;
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_2,0x2fe,data,8)==BSP_CAN_TX_ACCEPTED);
+ finish_mailbox(&hcan1,0);
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x2fe,data,8)==BSP_CAN_TX_ACCEPTED);
+ /* A stop aborts once, never overwrites an in-flight mailbox directly. */
+ abort_completes=0; before=aborts;
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x2fe,zero,8)==BSP_CAN_TX_BUSY);
+ assert(aborts==before+1);
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x2fe,zero,8)==BSP_CAN_TX_BUSY);
+ assert(aborts==before+1);
+ finish_mailbox(&hcan1,0); abort_completes=1;
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x2fe,zero,8)==BSP_CAN_TX_ACCEPTED);
+ regs[0].ESR=CAN_ESR_BOFF;
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x2fe,data,8)==BSP_CAN_TX_ERROR);
+ assert(!BspCan_OutputsArmed() && pending_masks[0]==0 && pending_masks[1]==0);
+ MotorTraceBatch batch; BspCan_TraceRead(&batch);
+ bool deferred=false;
+ for(unsigned i=0;i<batch.count;++i) deferred |= (batch.events[i].kind & 255U)==MOTOR_TRACE_DEFER;
+ assert(deferred);
+ pending_model=false; memset(regs,0,sizeof(regs)); now_ms=aborts=writes=chosen_mailbox=0;
+ puts("CAN single flight: PASS (ID/bus isolation, full mailboxes, completion, stop abort, fault cancellation)");
+}
+
 int main(void) {
  test_trace();
+ test_single_flight();
  assert(BspCan_Start(BSP_CAN_CHANNEL_1)&&BspCan_Start(BSP_CAN_CHANNEL_2));
  uint8_t zero[8]={0}, command[8]={0,100};
  BspCan_Service(0);

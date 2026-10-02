@@ -17,6 +17,12 @@ static bool s_outputs_armed;
 static bool s_healthy_seen;
 static uint32_t s_healthy_since_ms;
 static uint8_t s_abort_pending;
+/* Hardware mailbox ownership, task-context only. Payloads remain in CAN_Manager;
+ * this table prevents duplicate IDs from occupying multiple mailboxes. */
+static struct {
+    uint16_t id;
+    bool active, nonzero, abort_requested;
+} s_tx[2][3];
 
 #define CAN_RECOVERY_STEP_TIMEOUT_MS 20U
 #define CAN_RECOVERY_RETRY_MS 1000U
@@ -159,6 +165,7 @@ bool BspCan_Start(BspCanChannel channel)
     }
     unsigned index = (unsigned)channel - 1U;
     memset(&s_recovery[index], 0, sizeof(s_recovery[index]));
+    memset(s_tx[index], 0, sizeof(s_tx[index]));
     s_started[index] = true;
     s_outputs_armed = false;
     s_healthy_seen = false;
@@ -312,27 +319,50 @@ bool BspCan_Read(BspCanChannel channel, BspCanFrame *frame)
     return true;
 }
 
-static bool write_frame(BspCanChannel channel,
+static BspCanTxResult write_frame(BspCanChannel channel,
                   uint16_t standard_id,
                   const uint8_t *data,
                   uint8_t length)
 {
     CAN_HandleTypeDef *handle = handle_for(channel);
-    if (!handle || !handle->Instance || length > 8U || (length > 0U && !data)) {
-        return false;
+    if (!handle || !handle->Instance || standard_id > 0x7FFU || length > 8U || (length > 0U && !data)) {
+        return BSP_CAN_TX_ERROR;
     }
 
     unsigned index = (unsigned)channel - 1U;
-    if (!s_started[index]) return false;
+    if (!s_started[index]) return BSP_CAN_TX_ERROR;
     if ((handle->Instance->ESR & CAN_ESR_BOFF) != 0U) {
         latch_bus_fault(index, HAL_GetTick());
-        return false;
+        return BSP_CAN_TX_ERROR;
     }
-    if (s_recovery[index].phase != 0U || (s_abort_pending & (1U << index)) != 0U) return false;
+    if (s_recovery[index].phase != 0U || (s_abort_pending & (1U << index)) != 0U) return BSP_CAN_TX_ERROR;
     /* No buffered nonzero command may escape while the operator interlock is closed. */
     if (!s_outputs_armed) {
-        for (uint8_t i = 0U; i < length; ++i) if (data[i] != 0U) return false;
+        for (uint8_t i = 0U; i < length; ++i) if (data[i] != 0U) return BSP_CAN_TX_ERROR;
     }
+
+    trace_poll(channel);
+    bool nonzero = false;
+    for (unsigned i = 0U; i < length; ++i) nonzero |= data[i] != 0U;
+    for (unsigned i = 0U; i < 3U; ++i) {
+        if (!s_tx[index][i].active) continue;
+        uint32_t mailbox_mask = 1UL << i;
+        if (!HAL_CAN_IsTxMessagePending(handle, mailbox_mask)) {
+            s_tx[index][i].active = false;
+            continue;
+        }
+        if (s_tx[index][i].id != standard_id) continue;
+        /* Do not cancel every changing setpoint: hardware retransmission must
+         * be allowed to finish. Full zero output is the stop exception. */
+        if (length == 8U && !nonzero && s_tx[index][i].nonzero &&
+            !s_tx[index][i].abort_requested) {
+            if (HAL_CAN_AbortTxRequest(handle, mailbox_mask) != HAL_OK)
+                return BSP_CAN_TX_ERROR;
+            s_tx[index][i].abort_requested = true;
+        }
+        return BSP_CAN_TX_BUSY;
+    }
+    if (HAL_CAN_GetTxMailboxesFreeLevel(handle) == 0U) return BSP_CAN_TX_BUSY;
 
     CAN_TxHeaderTypeDef header = {0};
     uint8_t frame_data[8] = {0};
@@ -346,6 +376,14 @@ static bool write_frame(BspCanChannel channel,
     }
     trace_poll(channel);
     bool ok = HAL_CAN_AddTxMessage(handle, &header, frame_data, &mailbox) == HAL_OK;
+    if (ok) {
+        for (unsigned i = 0U; i < 3U; ++i) if (mailbox == (1UL << i)) {
+            s_tx[index][i].id = standard_id;
+            s_tx[index][i].active = true;
+            s_tx[index][i].nonzero = nonzero;
+            s_tx[index][i].abort_requested = false;
+        }
+    }
     if (ok && s_trace.channel == (uint32_t)channel) {
         for (unsigned i = 0U; i < 3U; ++i) if (mailbox == (1UL << i)) {
             uint32_t mailbox_tag = (i + 1U) << 8;
@@ -363,18 +401,25 @@ static bool write_frame(BspCanChannel channel,
             }
         }
     }
-    return ok;
+    return ok ? BSP_CAN_TX_ACCEPTED : BSP_CAN_TX_ERROR;
+}
+
+BspCanTxResult BspCan_TryWrite(BspCanChannel channel, uint16_t standard_id, const uint8_t *data, uint8_t length)
+{
+    BspCanTxResult result = write_frame(channel, standard_id, data, length);
+    if (result != BSP_CAN_TX_ACCEPTED && s_trace.channel == (uint32_t)channel &&
+        standard_id == s_trace.tx_id && data && length == 8U) {
+        unsigned slot = s_trace.slot * 2U;
+        int16_t raw = (int16_t)((uint16_t)data[slot] << 8 | data[slot + 1U]);
+        trace_push(result == BSP_CAN_TX_BUSY ? MOTOR_TRACE_DEFER : MOTOR_TRACE_REJECT,
+                   raw, s_trace.command_seq);
+    }
+    return result;
 }
 
 bool BspCan_Write(BspCanChannel channel, uint16_t standard_id, const uint8_t *data, uint8_t length)
 {
-    bool ok = write_frame(channel, standard_id, data, length);
-    if (!ok && s_trace.channel == (uint32_t)channel && standard_id == s_trace.tx_id && data && length == 8U) {
-        unsigned slot = s_trace.slot * 2U;
-        int16_t raw = (int16_t)((uint16_t)data[slot] << 8 | data[slot + 1U]);
-        trace_push(MOTOR_TRACE_REJECT, raw, s_trace.command_seq);
-    }
-    return ok;
+    return BspCan_TryWrite(channel, standard_id, data, length) == BSP_CAN_TX_ACCEPTED;
 }
 
 bool BspCan_MatchesNativeHandle(BspCanChannel channel, const void *native_handle)

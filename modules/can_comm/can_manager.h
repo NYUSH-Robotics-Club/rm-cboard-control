@@ -16,7 +16,7 @@
 typedef struct {
     uint16_t std_id;           // 0x200, 0x1FF, 0x2FF, 0x1FE, or 0x2FE
     int16_t currents[4];       // Currents for 4 motor slots
-    uint8_t pending;           // true if frame needs to be sent
+    uint8_t pending;           // latest per-slot values retained until mailbox acceptance
 } CANTxFrame_t;
 
 // CAN manager structure
@@ -34,6 +34,7 @@ typedef struct {
     // Debug counters
     uint32_t tx_ok;
     uint32_t tx_err;
+    uint32_t tx_busy;           // deferred, latest software values remain pending
     uint32_t rx_frames;
     uint32_t last_rx_id;
     uint32_t last_tx_time;

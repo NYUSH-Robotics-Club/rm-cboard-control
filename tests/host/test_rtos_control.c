@@ -18,7 +18,7 @@ static const RobotConfig_t robot = {.motor_configs = &motor, .total_motor_count 
 static MotorSnapshot snapshot;
 static uint32_t clock_ms;
 static uint32_t dispatch_duration_ms = 1U;
-static bool stale, create_failure, green_output;
+static bool stale, create_failure, green_output, dispatched, dashboard_called;
 static void (*task_entry)(void *);
 static void *task_argument;
 static jmp_buf cycle_complete;
@@ -41,11 +41,16 @@ void AppRuntime_Step(uint32_t now_ms) { (void)now_ms; }
 void CmdController_Task(uint32_t now_ms) { (void)now_ms; }
 void MsgCenter_Dispatch(void)
 {
+    dispatched=true;
     clock_ms += dispatch_duration_ms;
     snapshot = (MotorSnapshot){
         .initialized = true, .feedback_valid = true,
         .feedback_timestamp_ms = clock_ms - (stale ? 101U : 0U)
     };
+}
+void Dashboard_Task(uint32_t now_ms) {
+    assert(dispatched && now_ms == clock_ms);
+    dashboard_called = true;
 }
 TaskHandle_t xTaskCreateStatic(void (*entry)(void *), const char *name,
                               uint32_t depth, void *argument, unsigned priority,
@@ -61,11 +66,13 @@ TickType_t xTaskGetTickCount(void) { return 0; }
 void vTaskStartScheduler(void) { task_entry(task_argument); }
 void vTaskDelay(TickType_t delay)
 {
+    assert(dashboard_called);
     assert(delay == 2U); /* Match HAL_Delay(1), including its extra tick. */
     longjmp(cycle_complete, 1);
 }
 static void run_cycle(uint32_t start_ms, bool feedback_stale)
 {
+    dispatched=dashboard_called=false;
     clock_ms = start_ms;
     stale = feedback_stale;
     MotorOfflineAlarm_Init(&robot);

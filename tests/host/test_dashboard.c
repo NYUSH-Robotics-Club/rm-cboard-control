@@ -146,6 +146,15 @@ int main(void) {
     assert(captured.payload.gimbal_cmd_yaw_deg == -540);
     assert(captured.payload.gimbal_yaw_target_deg_s == -24);
     assert(isnan(captured.payload.gimbal_yaw_target_deg)); emit();
+    /* Real telemetry scheduler: bounded cadence, wrap-safe, no catch-up burst. */
+    before = writes;
+    now = 0; Dashboard_Task(now); assert(writes == before);
+    now = 19; Dashboard_Task(now); assert(writes == before);
+    now = 20; Dashboard_Task(now); assert(writes == before + 1);
+    Dashboard_Task(now); assert(writes == before + 1);
+    now = UINT32_MAX - 10U; Dashboard_Task(now); assert(writes == before + 2);
+    now = 5; Dashboard_Task(now); assert(writes == before + 2);
+    now = 10; Dashboard_Task(now); assert(writes == before + 3);
     return 0;
 }
 

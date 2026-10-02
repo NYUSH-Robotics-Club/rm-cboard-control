@@ -18,6 +18,7 @@ IMU 校准、应用订阅和通信启动。完成后调用 `RobotRtos_Start()`�
        -> chassis / gimbal / shooter 回调
        -> MotorService_Flush（派发结束钩子）
   -> MotorOfflineAlarm_Task
+  -> Dashboard_Task（至少20ms间隔，CAN提交后打包RTT）
   -> 1 Hz CAN 统计（日志限流）
   -> vTaskDelay(2 ticks)
 ```

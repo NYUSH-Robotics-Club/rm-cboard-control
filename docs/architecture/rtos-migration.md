@@ -24,7 +24,7 @@ SysTick 先递增 HAL tick，调度器启动后再递增 FreeRTOS tick。
 
 ```text
 IMU 更新 -> 可选应用步进 -> Cmd 路由 -> 消息派发及电机刷新 hook
--> 电机离线报警 -> 限流 CAN 统计 -> vTaskDelay(2 ticks)
+-> 电机离线报警 -> 限流 RTT 遥测（CAN提交后） -> 限流 CAN 统计 -> vTaskDelay(2 ticks)
 ```
 
 上电时仍在调度器启动前执行云台对齐和 IMU 校准。当前可选应用清单为空，

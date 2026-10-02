@@ -251,3 +251,6 @@ void BspCan_TraceCommand(BspCanChannel c, uint16_t tx, uint8_t slot, int16_t raw
 
 void BspCan_TraceFeedback(BspCanChannel c, uint16_t id, uint32_t ms, int32_t raw, uint32_t detail)
 { (void)c; (void)id; (void)ms; (void)raw; (void)detail; }
+
+BspCanTxResult BspCan_TryWrite(BspCanChannel c, uint16_t id, const uint8_t *d, uint8_t n)
+{ return BspCan_Write(c,id,d,n) ? BSP_CAN_TX_ACCEPTED : BSP_CAN_TX_ERROR; }

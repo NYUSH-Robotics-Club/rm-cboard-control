@@ -43,7 +43,14 @@ bool BspCan_Start(BspCanChannel channel);
 /* 从通道的 FIFO0 读取一帧；无数据或硬件错误均返回 false。 */
 bool BspCan_Read(BspCanChannel channel, BspCanFrame *frame);
 
-/* 发送 0～8 字节的标准数据帧。 */
+typedef enum { BSP_CAN_TX_ACCEPTED, BSP_CAN_TX_BUSY, BSP_CAN_TX_ERROR } BspCanTxResult;
+/* Task-context only. At most one in-flight frame per (channel, standard_id).
+ * BUSY does not consume the caller's latest pending value. No blocking/retry loop.
+ * A full zero frame cancels an older nonzero frame of that ID before submission. */
+BspCanTxResult BspCan_TryWrite(BspCanChannel channel, uint16_t standard_id,
+                              const uint8_t *data, uint8_t length);
+
+/* Compatibility wrapper: true only when accepted by a hardware mailbox. */
 bool BspCan_Write(BspCanChannel channel,
                   uint16_t standard_id,
                   const uint8_t *data,

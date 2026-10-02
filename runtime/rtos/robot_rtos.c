@@ -3,6 +3,7 @@
  * preserves the old execution order while RTOS support is introduced safely.
  */
 #include "robot_rtos.h"
+#include "dashboard.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "app_subscriptions.h"
@@ -68,6 +69,9 @@ static void control_task(void *argument)
         MsgCenter_Dispatch();
         /* Dispatch may publish feedback newer than the cycle-start timestamp. */
         MotorOfflineAlarm_Task(BspTime_NowMs());
+        /* Dispatch has already flushed motor mailboxes. Telemetry must never
+         * sit between current computation and its hardware submission. */
+        Dashboard_Task(BspTime_NowMs());
         log_can_health(now_ms);
 
         /* Preserve callback-based ramps; do not replay overdue control cycles. */
