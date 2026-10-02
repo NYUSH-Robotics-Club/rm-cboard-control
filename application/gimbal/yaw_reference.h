@@ -30,9 +30,9 @@ void YawReference_Seed(YawReference *ref, uint16_t raw,
  */
 bool YawReference_Update(YawReference *ref, uint16_t raw, int16_t rpm,
                          uint32_t feedback_ms, uint32_t now_ms, float *dt_s);
-/* 只裁剪本次输入增量，允许减小已有超限误差；stick=0严格保留目标。 */
+/* 按输入积分连续目标；input_gain为无量纲摇杆放大倍数，stick=0严格保留目标。 */
 void YawReference_Advance(YawReference *ref, float stick, float rate_deg_s,
-                          float dt_s, float lead_deg);
+                          float dt_s, float input_gain);
 /* 输出0..8192的单圈兼容角，不改变内部连续位置/目标。 */
 float YawReference_Wrap(float ticks);
 #endif

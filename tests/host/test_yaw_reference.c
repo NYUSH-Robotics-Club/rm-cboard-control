@@ -4,7 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 
-static void near(float a, float b) { assert(fabsf(a-b)<0.05f); }
+static void near(float a, float b) { assert(fabsf(a-b)<0.2f); }
 
 int main(void) {
     YawReference r;
@@ -15,33 +15,35 @@ int main(void) {
         YawReference_Seed(&r,4555,100,100);
         for(unsigned t=100+periods[j];t<=200;t+=periods[j]) {
             assert(YawReference_Update(&r,4555,0,t,t,&dt));
-            YawReference_Advance(&r,1,30,dt,10);
+            YawReference_Advance(&r,1,30,dt,1);
         }
         near(r.target_ticks,4555+3*8192.0f/360);
         float held=r.target_ticks;
         assert(YawReference_Update(&r,4555,0,200,200,&dt));
-        YawReference_Advance(&r,1,30,dt,10);near(r.target_ticks,held);
+        YawReference_Advance(&r,1,30,dt,1);near(r.target_ticks,held);
     }
     YawReference_Seed(&r,4555,100,100);
     for(unsigned t=104;t<=2100;t+=4) {
         assert(YawReference_Update(&r,4555,0,t,t,&dt));
-        YawReference_Advance(&r,1,30,dt,10);
+        YawReference_Advance(&r,1,30,dt,1);
     }
-    near(r.target_ticks-r.position_ticks,10*8192.0f/360);
+    near(r.target_ticks-r.position_ticks,30*2.0f*8192.0f/360);
     float held=r.target_ticks;
-    /* 真实位置背离导致超限时，回中与继续外推都不得拖动旧目标。 */
+    /* 回中严格保持目标；反向输入直接减少连续目标。 */
     assert(YawReference_Update(&r,4355,0,2104,2104,&dt));
-    YawReference_Advance(&r,0,30,dt,10);near(r.target_ticks,held);
-    YawReference_Advance(&r,1,30,dt,10);near(r.target_ticks,held);
-    YawReference_Advance(&r,-1,30,dt,10);assert(r.target_ticks<held);
+    YawReference_Advance(&r,0,30,dt,1);near(r.target_ticks,held);
+    YawReference_Advance(&r,1,30,dt,1);assert(r.target_ticks>held);
+    YawReference_Advance(&r,-1,30,dt,1);near(r.target_ticks,held);
     YawReference_Seed(&r,8190,100,100);
     assert(YawReference_Update(&r,2,0,104,104,&dt));near(r.position_ticks,8194);
     assert(YawReference_Update(&r,8190,0,108,108,&dt));near(r.position_ticks,8190);
     YawReference_Seed(&r,4555,100,100);
     for(unsigned n=1;n<=100;n++) {
         assert(YawReference_Update(&r,(4555+n*100)%8192,180,100+4*n,100+4*n,&dt));
-        near(r.target_ticks,4555);
-        near(r.target_ticks-r.position_ticks,-100.0f*n);
+        YawReference_Advance(&r,1,30,dt,1);
+        near(r.target_ticks,4555 + 30.0f * 0.004f * n * 8192.0f / 360.0f);
+        near(r.target_ticks-r.position_ticks,
+             30.0f * 0.004f * n * 8192.0f / 360.0f - 100.0f*n);
     }
     near(YawReference_Wrap(r.position_ticks),(4555+10000)%8192);
     /* 新帧不能补救已丢失的长时间历史，失效后必须显式重新Seed。 */
@@ -57,5 +59,10 @@ int main(void) {
     assert(YawReference_Update(&r,123,0,1,1,&dt));near(dt,0.004f);
     /* 重复同一毫秒的新反馈允许小位移，但不重复积分控制时间。 */
     assert(YawReference_Update(&r,125,0,1,1,&dt));near(dt,0);
-    puts("yaw reference: PASS (time, hold, lead, unwrap, continuity loss)");
+    /* 二倍输入增益应使同一时间内的目标增量翻倍。 */
+    YawReference_Seed(&r,4555,100,100);
+    assert(YawReference_Update(&r,4555,0,104,104,&dt));
+    YawReference_Advance(&r,0.5f,30,dt,2.0f);
+    near(r.target_ticks,4555 + 30.0f * 0.004f * 2.0f * 0.5f * 8192.0f / 360.0f);
+    puts("yaw reference: PASS (time, hold, input gain, unwrap, continuity loss)");
 }

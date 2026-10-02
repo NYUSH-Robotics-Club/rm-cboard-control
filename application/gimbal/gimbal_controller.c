@@ -100,18 +100,6 @@ static float yaw_segmented_damping_gain(const YawControlConfig *cfg,
   return cfg->far_damping_gain;
 }
 
-/* Select the target lead from the same low, middle and high speed zones. */
-static float yaw_segmented_target_lead(const YawControlConfig *cfg,
-                                       float angle_error_ticks) {
-  if (!cfg || !isfinite(angle_error_ticks)) return 0.0f;
-  float error_deg = fabsf(angle_error_ticks) * 360.0f / YAW_ENCODER_TICKS;
-  if (error_deg <= cfg->near_error_deg) return cfg->near_target_lead_deg;
-  if (error_deg <= cfg->approach_error_deg) {
-    return cfg->approach_target_lead_deg;
-  }
-  return cfg->far_target_lead_deg;
-}
-
 /* 无历史状态：前馈取本次速度内环目标，单位是电机协议原始命令刻度。
  * 0限幅直接关闭；启用后的非法参数/计算结果交由调用方停止两轴并重新对齐。
  */
@@ -409,8 +397,7 @@ static bool yaw_config_valid(const YawControlConfig *cfg) {
       isfinite(cfg->far_damping_gain) && cfg->far_damping_gain >= 0.0f &&
       isfinite(cfg->approach_damping_gain) && cfg->approach_damping_gain >= 0.0f &&
       isfinite(cfg->near_damping_gain) && cfg->near_damping_gain >= 0.0f &&
-      isfinite(cfg->near_target_lead_deg) && cfg->near_target_lead_deg >= 0.0f &&
-      cfg->near_target_lead_deg <= 180.0f &&
+      isfinite(cfg->manual_stick_gain) && cfg->manual_stick_gain > 0.0f &&
       isfinite(cfg->brake_speed_rpm) && cfg->brake_speed_rpm >= 0.0f &&
       cfg->brake_speed_rpm >= cfg->near_speed_rpm &&
       isfinite(cfg->approach_error_deg) && cfg->approach_error_deg > 0.0f &&
@@ -418,12 +405,7 @@ static bool yaw_config_valid(const YawControlConfig *cfg) {
       cfg->near_error_deg <= cfg->approach_error_deg &&
       isfinite(cfg->approach_speed_rpm) && cfg->approach_speed_rpm > 0.0f &&
       isfinite(cfg->near_speed_rpm) && cfg->near_speed_rpm > 0.0f &&
-      cfg->near_speed_rpm <= cfg->approach_speed_rpm &&
-      isfinite(cfg->approach_target_lead_deg) &&
-      cfg->approach_target_lead_deg >= 0.0f &&
-      cfg->approach_target_lead_deg <= 180.0f &&
-      isfinite(cfg->far_target_lead_deg) && cfg->far_target_lead_deg >= 0.0f &&
-      cfg->far_target_lead_deg <= 180.0f;
+      cfg->near_speed_rpm <= cfg->approach_speed_rpm;
 }
 
 static bool spin_pid_config_valid(const YawControlConfig *cfg) {
@@ -514,12 +496,9 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
 
   float rpm_limit = cfg->manual_speed_rpm;
   if (mode == YAW_CONTROL_MANUAL) {
-    /* 新模式首帧不把上一模式的时间间隔积分到新目标。 */
-    float target_error_ticks = s_yaw_reference.target_ticks -
-                               s_yaw_reference.position_ticks;
-    float target_lead_deg = yaw_segmented_target_lead(cfg, target_error_ticks);
+    /* 手动目标独立积分；目标角不再被实际位置或分段阈值裁剪。 */
     YawReference_Advance(&s_yaw_reference, rate_normalized, cfg->manual_rate_deg_s,
-                          mode_changed ? 0.0f : dt_s, target_lead_deg);
+                          mode_changed ? 0.0f : dt_s, cfg->manual_stick_gain);
   } else if (mode == YAW_CONTROL_VISION) {
     s_yaw_reference.target_ticks = s_yaw_reference.position_ticks +
         s_last_cmd.vision_yaw_err_rad * YAW_ENCODER_TICKS / (2.0f * (float)M_PI);
@@ -565,9 +544,10 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     rpm_limit = yaw_segmented_speed_limit(cfg, rpm_limit, angle_error, mode);
     selected_rpm_limit = rpm_limit;
     if (reverse_braking) {
-      /* Any manual/vision error zone may use the larger braking limit to shed
-       * existing angular momentum; normal tracking remains zone-limited. */
+      /* Keep normal tracking segmented, but cap the reverse target itself. */
       selected_rpm_limit = fmaxf(selected_rpm_limit, cfg->brake_speed_rpm);
+      speed_target = fmaxf(-cfg->brake_speed_rpm,
+                           fminf(speed_target, cfg->brake_speed_rpm));
     }
   }
   speed_target = fmaxf(-selected_rpm_limit,

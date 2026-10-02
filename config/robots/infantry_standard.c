@@ -27,24 +27,24 @@ static const ChassisFollowConfig s_chassis_follow = {
 /* 手动输入按度/秒积分；普通推杆与回中共用限速。 */
 static const YawControlConfig s_yaw_control = {
     .manual_rate_deg_s = 1200.0f,
-    .manual_speed_rpm = 220.0f,
-    .vision_speed_rpm = 220.0f,
+    .manual_stick_gain = 0.3f,
+    .manual_speed_rpm = 60.0f,
+    .vision_speed_rpm = 60.0f,
     .spin_speed_rpm = 15.0f,
     .speed_loop_only = false, /* 步兵暂时旁路位置环；哨兵保留串级。 */
-    /* 低速/近目标：小超前角，优先抑制小角度换向过冲。 */
-    .near_target_lead_deg = 4.5f,
-    .near_error_deg = 2.0f,/*近目标判定阈值*/
-    .near_speed_rpm = 10.0f,
     .brake_speed_rpm = 40.0f,/*全阶段反向制动上限，单位RPM*/
+
+    /* 低速/近目标：按真实目标误差限速，优先抑制小角度换向过冲。 */
+    .near_error_deg = 8.0f,/*近目标判定阈值*/
+    .near_speed_rpm = 12.0f,
+    
     .near_damping_gain = 1.00f,
-    /* 中速/接近：适度超前，兼顾跟手和刹车。 */
-    .approach_target_lead_deg = 8.0f,
-    .approach_error_deg = 8.0f,/*中目标判定阈值*/
-    .approach_speed_rpm = 30.0f,
-    .approach_damping_gain = 0.70f,
-    /* 高速/远距离：允许更大超前，沿用manual/vision速度上限。 */
-    .far_target_lead_deg = 12.0f,
-    .far_damping_gain = 0.15f,
+    /* 中速/接近：适度限速，兼顾跟手和刹车。 */
+    .approach_error_deg = 45.0f,/*中目标判定阈值*/
+    .approach_speed_rpm = 35.0f,
+    .approach_damping_gain = 0.85f,
+    /* 高速/远距离：沿用manual/vision速度上限。 */
+    .far_damping_gain = 0.60f,
     /* Spin hold is deliberately softer than manual yaw to avoid chatter. */
     .spin_pid_outer = {0.025f, 0.0f, 0.0f, 1000.0f, 20.0f},
     .spin_pid_inner = {240.0f, 5.0f, 0.0f, 14000.0f, 300.0f}

@@ -54,13 +54,11 @@ bool YawReference_Update(YawReference *ref, uint16_t raw, int16_t rpm,
 }
 
 void YawReference_Advance(YawReference *ref, float stick, float rate_deg_s,
-                          float dt_s, float lead_deg) {
+                          float dt_s, float input_gain) {
     if (!ref->valid || stick == 0.0f || dt_s <= 0.0f) return;
-    float step = fmaxf(-1.0f, fminf(stick, 1.0f)) * rate_deg_s * dt_s *
+    if (!isfinite(rate_deg_s) || rate_deg_s <= 0.0f ||
+        !isfinite(input_gain) || input_gain <= 0.0f) return;
+    float step = fmaxf(-1.0f, fminf(stick, 1.0f)) * input_gain * rate_deg_s * dt_s *
                  YAW_ENCODER_TICKS / 360.0f;
-    float error = ref->target_ticks - ref->position_ticks;
-    float limit = lead_deg * YAW_ENCODER_TICKS / 360.0f;
-    if (step > 0.0f) step = fminf(step, fmaxf(0.0f, limit - error));
-    if (step < 0.0f) step = fmaxf(step, fminf(0.0f, -limit - error));
     ref->target_ticks += step;
 }

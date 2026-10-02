@@ -19,20 +19,18 @@
 /* 哨兵保留原模式限速；旧70刻度按200Hz参考换算为度/秒，不代表已实测周期。 */
 static const YawControlConfig s_yaw_control = {
     .manual_rate_deg_s = 615.234375f,
+    .manual_stick_gain = 1.0f,
     .manual_speed_rpm = 300.0f,
     .vision_speed_rpm = 500.0f,
     .spin_speed_rpm = 500.0f,
     .speed_loop_only = false, /* 哨兵继续执行位置/速度串级。 */
-    .near_target_lead_deg = 180.0f,
     .near_error_deg = 10.0f,
     .near_speed_rpm = 10.0f,
     .brake_speed_rpm = 10.0f,
     .near_damping_gain = 0.35f,
-    .approach_target_lead_deg = 180.0f,
     .approach_error_deg = 30.0f,
     .approach_speed_rpm = 30.0f,
     .approach_damping_gain = 0.35f,
-    .far_target_lead_deg = 180.0f,
     .far_damping_gain = 0.35f
 };
 

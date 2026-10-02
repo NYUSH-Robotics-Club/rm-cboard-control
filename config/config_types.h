@@ -125,20 +125,18 @@ typedef struct {
 /* yaw 应用参数；速度调试开关只绕过位置环，不改变电调模式或 PID 参数。 */
 typedef struct {
     float manual_rate_deg_s;       /* 满杆目标角速度；速度调试时除以6得到RPM。 */
+    float manual_stick_gain;       /* 手动摇杆输入放大倍数；1.0表示不放大。 */
     float manual_speed_rpm;        /* 普通推杆和回中共用的速度上限。 */
     float vision_speed_rpm;        /* 明确进入视觉模式时的速度上限。 */
     float spin_speed_rpm;          /* 明确进入spin模式时的速度上限。 */
     bool speed_loop_only;          /* true：暂时旁路位置环，只调电机RPM速度环。 */
-    float near_target_lead_deg;    /* 近目标/低速区的推杆目标超前角，单位度。 */
     float near_error_deg;          /* 进入近目标/低速区的位置误差阈值，单位度。 */
     float near_speed_rpm;          /* 近目标/低速区的目标速度上限，单位RPM。 */
     float brake_speed_rpm;         /* 全误差区反向制动时的独立速度上限，单位RPM。 */
     float near_damping_gain;       /* 近目标/低速区的实际RPM阻尼系数。 */
-    float approach_target_lead_deg;/* 接近/中速区的推杆目标超前角，单位度。 */
     float approach_error_deg;      /* 进入接近/中速区的位置误差阈值，单位度。 */
     float approach_speed_rpm;      /* 接近/中速区的目标速度上限，单位RPM。 */
     float approach_damping_gain;   /* 接近/中速区的实际RPM阻尼系数。 */
-    float far_target_lead_deg;     /* 远距离/高速区的推杆目标超前角，单位度。 */
     float far_damping_gain;        /* 远距离/高速区的实际RPM阻尼系数。 */
     PIDParams_t spin_pid_outer;    /* 小陀螺独立位置环；全零表示沿用电机PID。 */
     PIDParams_t spin_pid_inner;    /* 小陀螺独立速度环；全零表示沿用电机PID。 */
