@@ -53,6 +53,7 @@ typedef struct {
     float vision_yaw_err_rad;
     float vision_pitch_err_rad;
     uint32_t vision_ts_ms;
+    uint32_t vision_frame; /* 路由收到新视觉消息时递增；同毫秒多帧也可区分。 */
     GimbalCommandTrace trace; /* 零初始化表示启动等非遥控路由来源，没有伪造输入。 */
 } GimbalCmd;
 

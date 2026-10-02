@@ -12,7 +12,8 @@ USB CDC 接收
   -> TOPIC_VISION_DATA / Vision_Recv_s
   -> LegacyVisionBridge
   -> TOPIC_VISION_TARGET / VisionTargetMessage
-  -> CmdController
+  -> CmdController / CommandRouter
+  -> GimbalController 双轴位置目标与现有闭环
 ```
 
 当前接入的是基础回调 `VisionComm_RxCallback()`：
@@ -24,6 +25,26 @@ USB CDC 接收
 
 姿态回传由 IMU 主题触发，`vision_comm.c` 中固定使用 10 ms 间隔，即约 100 Hz。
 回传字节现在通过 `bsp/usb` 发送；冻结的 USB 接收回调仍保持不变。
+
+## 双轴目标与控制
+
+路由只接收版本匹配、目标有效且双轴误差有限的消息；每次接收递增内部
+`vision_frame`，控制周期复用消息时不递增。沿用20 ms无新消息退出视觉的规则，
+未根据未知的相机帧率扩大超时。遥控失联与禁用仍优先停机。
+
+每个新帧将弧度误差转换为8192刻度/圈的位置增量，加到本次处理时的轴位置：
+yaw使用连续`target_ticks`，pitch使用绝对编码目标并裁剪到车型配置限位
+（步兵1607～2374）。两轴帧间保持目标，不重复叠加误差，不经过摇杆倍率或时间积分，
+视觉有效时不叠加手动杆量。退出视觉时从实际位置恢复手动控制。
+
+普通/视觉yaw共用现有位置/速度PID、分段速度上限、阻尼和反向制动；视觉基础上限
+仍读取`vision_speed_rpm`。pitch共用现有PID、单一速度阻尼、负载配置和越界锁存停机，
+不新增视觉专用PID，不恢复端点制动平滑。pitch切换输入源只清位置环历史，保留承重速度积分。
+
+内部误差正值表示增加对应电机编码目标。旧Seasky适配器仍直接传递yaw/pitch弧度；
+相机方向与电机编码方向的对应尚需联调确认，不能根据pitch摇杆的direction猜视觉符号。
+现协议没有可用的拍摄时间与历史姿态配对，因此本路径不含视觉延迟补偿；
+可选目标速度字段也尚未用作前馈。Jetson新协议仍不支持。
 
 ## 尚未接入运行路径的能力
 

@@ -5,6 +5,8 @@
 #include "gimbal_controller.h"
 #include "gimbal_monitor.h"
 #include "yaw_reference.h"
+#include "yaw_damping.h"
+#include "pitch_control_math.h"
 #include "message_center.h"
 #include "motor_driver.h"
 #include "motor_service.h"
@@ -32,6 +34,19 @@ static uint8_t s_yaw_motor_id = 0xFF;
 
 /* yaw状态只由命令派发上下文修改；电机兼容字段仍保存单圈角。 */
 static YawReference s_yaw_reference;
+static YawDampingState s_yaw_damping;
+/* pitch目标仍使用有界绝对编码；积分时钟只由命令上下文推进。 */
+static uint32_t s_pitch_control_ms;
+static bool s_pitch_clock_valid;
+static bool s_pitch_vision_active;
+static uint32_t s_pitch_vision_frame;
+static uint32_t s_yaw_vision_frame;
+static bool s_pitch_limit_fault; /* 越界后须禁用再重新使能，禁止弹回范围后自动重启。 */
+
+static void pitch_reset_control(void) {
+  s_pitch_clock_valid = false;
+  s_pitch_vision_active = false;
+}
 static YawControlMode s_yaw_mode;
 static bool s_yaw_mode_valid;
 static float s_spin_turn_offset_deg;
@@ -64,6 +79,7 @@ static bool s_spin_pid_valid;
 
 
 static void yaw_invalidate(void);
+static bool yaw_config_valid(const YawControlConfig *cfg);
 
 /*
  * Limit the position loop's speed target before the motor speed loop runs.
@@ -87,16 +103,6 @@ static float yaw_segmented_speed_limit(const YawControlConfig *cfg,
     limit_rpm = fminf(limit_rpm, cfg->approach_speed_rpm);
   }
   return limit_rpm;
-}
-
-/* Select the damping coefficient from the same position-error zones. */
-static float yaw_segmented_damping_gain(const YawControlConfig *cfg,
-                                        float angle_error_ticks) {
-  if (!cfg || !isfinite(angle_error_ticks)) return 0.0f;
-  float error_deg = fabsf(angle_error_ticks) * 360.0f / YAW_ENCODER_TICKS;
-  if (error_deg <= cfg->near_error_deg) return cfg->near_damping_gain;
-  if (error_deg <= cfg->approach_error_deg) return cfg->approach_damping_gain;
-  return cfg->far_damping_gain;
 }
 
 /* 无历史状态：前馈取本次速度内环目标，单位是电机协议原始命令刻度。
@@ -214,6 +220,7 @@ static bool capture_startup_position(void) {
     YawReference_Seed(&s_yaw_reference, yaw->angle_raw,
                       yaw->last_feedback_time, BspTime_NowMs());
     s_yaw_mode_valid = false;
+    YawDamping_Reset(&s_yaw_damping);
     yaw->angle_target = (float)yaw->angle_raw;
     yaw->angle_initialized = true;
     PID_Reset(&yaw->pid_outer);
@@ -223,6 +230,9 @@ static bool capture_startup_position(void) {
     s_last_coupling_yaw_time_ms = BspTime_NowMs();
   }
   if (pitch) {
+    pitch_reset_control();
+    s_pitch_control_ms = BspTime_NowMs();
+    s_pitch_clock_valid = true;
     pitch->angle_target = pitch_target;
     pitch->angle_initialized = true;
     PID_Reset(&pitch->pid_outer);
@@ -246,9 +256,23 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
     return 0;
   }
 
-  // Joystick control with sensitivity scaling
-  float sensitivity = 60.0f; // Increased for more responsive tracking
-  float pitch_delta_ticks = c->config->direction * sensitivity * rate_normalized;
+  const PitchControlConfig *cfg = c->config->pitch_control;
+  uint32_t now = BspTime_NowMs();
+  uint32_t elapsed = s_pitch_clock_valid ? now - s_pitch_control_ms : 0U;
+  if (!PitchControl_ConfigValid(cfg) ||
+      !isfinite(c->angle_target) || elapsed > YAW_REFERENCE_MAX_GAP_MS ||
+      !axis_feedback_fresh(id, now) ||
+      (uint32_t)(now - c->last_feedback_time) > YAW_REFERENCE_MAX_GAP_MS) {
+    yaw_invalidate();
+    return 0;
+  }
+  s_pitch_control_ms = now;
+  s_pitch_clock_valid = true;
+  /* 与yaw相同的秒积分和输入倍率；保留pitch的编码方向，不对目标绕圈。
+   * 同毫秒重复调用不移动；超时不补算停机期间的杆量。 */
+  float pitch_delta_ticks = c->config->direction *
+      fmaxf(-1.0f, fminf(rate_normalized, 1.0f)) * cfg->manual_rate_deg_s *
+      cfg->manual_stick_gain * ((float)elapsed * 0.001f) * YAW_ENCODER_TICKS / 360.0f;
   c->angle_target += pitch_delta_ticks;
 
   /* 旧视线耦合模型需按机械结构验证，只在配置显式开启且非自瞄时改写目标。
@@ -333,9 +357,7 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
     if (pushing_lower || pushing_upper) {
       /* Reject only the outward joystick delta; inward motion remains available. */
       c->angle_target = current_angle;
-      PID_Reset(&c->pid_outer);
-      PID_Reset(&c->pid_inner);
-      return 0;
+      /* 拒绝越界输入但继续制动/承重，不能在运动中直接撤掉全部输出。 */
     }
   }
   float error = c->angle_target - current_angle;
@@ -345,14 +367,26 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
     error += max_encoder;
 
   float speed_target =
-      PID_CalculateDivided(&c->pid_outer, error, 0.0f,PID_PITCH_OUTER_DIVIDER);
+      PID_CalculateDivided(&c->pid_outer, error, 0.0f, 1U);
+  /* 单一实际速度阻尼：静止不削弱位置环出力，不保留分段/反向制动状态。
+   * 阻尼后仍受原位置PID输出上限约束，单位RPM；不新增低速区限幅。 */
+  speed_target -= cfg->velocity_damping_gain * (float)c->speed_rpm;
+  float speed_limit = c->config->pid_outer.output_max;
+  if (!isfinite(speed_target) || !isfinite(speed_limit) || speed_limit <= 0.0f) {
+    yaw_invalidate();
+    return 0;
+  }
+  speed_target = fmaxf(-speed_limit, fminf(speed_target, speed_limit));
   float feedforward;
   if (!calculate_feedforward(&c->config->feedforward, speed_target, &feedforward)) {
     yaw_invalidate();
     return 0;
   }
-  float cmd = PID_Calculate(&c->pid_inner, speed_target, (float)c->speed_rpm)
-            + feedforward;
+  /* 负载前馈不受速度目标过零/换向影响；pitch积分保留承重残差。
+   * 停机/故障仍由公共停机路径清PID，不复用yaw运动积分的清理规则。 */
+  float previous_iout=c->pid_inner.iout;
+  float cmd=PID_Calculate(&c->pid_inner,speed_target,(float)c->speed_rpm)
+      +feedforward+PitchControl_Load(cfg,current_angle);
 
   if (is_pitch_motor) {
     /* 重力相位使用配置的机械零点；非有限配置沿用下方双轴停机路径。 */
@@ -368,7 +402,13 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
     yaw_invalidate();
     return 0;
   }
-  float max_abs = (float)MotorDriver_GetCommandLimit(id);
+  float max_abs = fminf((float)MotorDriver_GetCommandLimit(id),
+                        c->config->pid_inner.output_max);
+  /* 总输出饱和时不继续累积同向积分；前馈也不能越过原内环出力上限。 */
+  if (fabsf(cmd)>max_abs && cmd*c->pid_inner.error[0]>0) {
+    c->pid_inner.iout=previous_iout;
+    c->pid_inner.iterm=0;
+  }
   if (cmd > max_abs)
     cmd = max_abs;
   if (cmd < -max_abs)
@@ -389,7 +429,7 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
 
 /* 配置无效时禁止出力，不能静默回退到旧的按回调次数累加。 */
 static bool yaw_config_valid(const YawControlConfig *cfg) {
-  return cfg && isfinite(cfg->manual_rate_deg_s) && cfg->manual_rate_deg_s > 0.0f &&
+  return cfg && YawDamping_ConfigValid(cfg) && isfinite(cfg->manual_rate_deg_s) && cfg->manual_rate_deg_s > 0.0f &&
       isfinite(cfg->manual_speed_rpm) && cfg->manual_speed_rpm > 0.0f &&
       isfinite(cfg->vision_speed_rpm) && cfg->vision_speed_rpm > 0.0f &&
       isfinite(cfg->spin_speed_rpm) && cfg->spin_speed_rpm > 0.0f &&
@@ -420,6 +460,8 @@ static bool spin_pid_config_valid(const YawControlConfig *cfg) {
 }
 
 static void yaw_invalidate(void) {
+  pitch_reset_control();
+  YawDamping_Reset(&s_yaw_damping);
   s_yaw_reference.valid = false;
   s_yaw_mode_valid = false;
   s_startup_position_captured = false;
@@ -464,6 +506,7 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
       sensor_data->g_gz * 30.0f / (float)M_PI : (float)yaw->speed_rpm;
   bool mode_changed = !s_yaw_mode_valid || mode != s_yaw_mode;
   if (mode_changed) {
+    YawDamping_Reset(&s_yaw_damping);
     s_yaw_reference.target_ticks = s_yaw_reference.position_ticks;
     if (use_spin_pid) {
       PID_Init(&s_spin_outer_pid, cfg->spin_pid_outer.kp, cfg->spin_pid_outer.ki,
@@ -499,8 +542,12 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     YawReference_Advance(&s_yaw_reference, rate_normalized, cfg->manual_rate_deg_s,
                           mode_changed ? 0.0f : dt_s, cfg->manual_stick_gain);
   } else if (mode == YAW_CONTROL_VISION) {
-    s_yaw_reference.target_ticks = s_yaw_reference.position_ticks +
-        s_last_cmd.vision_yaw_err_rad * YAW_ENCODER_TICKS / (2.0f * (float)M_PI);
+    /* 一帧误差只生成一次绝对目标，等待下帧时不能随实际位置重新锚定。 */
+    if (mode_changed || s_yaw_vision_frame != s_last_cmd.vision_frame) {
+      s_yaw_reference.target_ticks = s_yaw_reference.position_ticks +
+          s_last_cmd.vision_yaw_err_rad * YAW_ENCODER_TICKS / (2.0f * (float)M_PI);
+      s_yaw_vision_frame = s_last_cmd.vision_frame;
+    }
     rpm_limit = cfg->vision_speed_rpm;
   } else {
     /* 世界航向目标只在进入spin时建立一次；持续保留误差，
@@ -533,7 +580,11 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
      * position error changes sign.  This applies to manual and vision yaw;
      * spin keeps its separately tuned feedback path.
      */
-    speed_target -= yaw_segmented_damping_gain(cfg, angle_error) * speed_feedback;
+    speed_target -= YawDamping_Update(&s_yaw_damping, cfg,
+        angle_error * 360.0f / YAW_ENCODER_TICKS, speed_feedback,
+        s_yaw_reference.target_ticks) * speed_feedback;
+  } else {
+    YawDamping_Reset(&s_yaw_damping);
   }
   bool reverse_braking = mode != YAW_CONTROL_SPIN && !cfg->speed_loop_only &&
                          fabsf(speed_feedback) > YAW_STOP_SPEED_EPS_RPM &&
@@ -751,14 +802,17 @@ static void process_gimbal_cmd(const MsgEvent *ev, void *user) {
     uint32_t now_ms = BspTime_NowMs();
     bool fresh = axis_feedback_fresh(s_yaw_motor_id, now_ms) &&
                  axis_feedback_fresh(s_pitch_motor_id, now_ms);
-    if (!fresh || !s_last_cmd.enabled) {
+    if (!s_last_cmd.enabled) s_pitch_limit_fault=false;
+    else if (fresh && s_startup_position_captured && !pitch_position_safe())
+      s_pitch_limit_fault=true;
+    if (!fresh || !s_last_cmd.enabled || s_pitch_limit_fault) {
       s_feedback_stable_seen = false;
       s_startup_position_captured = false;
     } else if (!s_feedback_stable_seen) {
       s_feedback_stable_seen = true;
       s_feedback_stable_since_ms = now_ms;
     }
-    bool startup_ready = fresh && s_feedback_stable_seen && pitch_position_safe() &&
+    bool startup_ready = fresh && !s_pitch_limit_fault && s_feedback_stable_seen && pitch_position_safe() &&
         (uint32_t)(now_ms - s_feedback_stable_since_ms) >= 100U &&
         (s_startup_position_captured || capture_startup_position());
 
@@ -772,8 +826,30 @@ static void process_gimbal_cmd(const MsgEvent *ev, void *user) {
           s_last_cmd.yaw_rate, &s_last_sensor, mode);
       int16_t pitch_current = 0;
       if (s_yaw_reference.valid) {
-        pitch_current = GimbalController_PitchControl(
-            s_pitch_motor_id, s_last_cmd.pitch_rate, &s_last_sensor, use_vision_target);
+        MotorContext_t *pitch = MotorDriver_GetContext(s_pitch_motor_id);
+        if (use_vision_target && !isfinite(s_last_cmd.vision_pitch_err_rad)) {
+          yaw_invalidate();
+        } else if (pitch) {
+          /* 视觉误差是弧度位置增量，不经过摇杆倍率或dt积分。
+           * 共用后面的pitch PID/阻尼/绝对限位；模式退出从实际位置接管。 */
+          if (use_vision_target && (!s_pitch_vision_active ||
+              s_pitch_vision_frame != s_last_cmd.vision_frame)) {
+            pitch->angle_target = (float)pitch->angle_raw +
+                s_last_cmd.vision_pitch_err_rad * (YAW_ENCODER_TICKS / (2.0f * (float)M_PI));
+            s_pitch_vision_frame = s_last_cmd.vision_frame;
+          } else if (!use_vision_target && s_pitch_vision_active) {
+            pitch->angle_target = (float)pitch->angle_raw;
+            s_pitch_control_ms = now_ms;
+          }
+          if (use_vision_target != s_pitch_vision_active) {
+            PID_Reset(&pitch->pid_outer);
+            /* 速度内环积分承受弹簧负载，切换输入源时不清除。 */
+          }
+          s_pitch_vision_active = use_vision_target;
+          pitch_current = GimbalController_PitchControl(
+              s_pitch_motor_id, use_vision_target ? 0.0f : s_last_cmd.pitch_rate,
+              &s_last_sensor, use_vision_target);
+        }
       }
       /* 连续角度或任一轴前馈失败，同时停两轴并重新等待稳定反馈。 */
       if (!s_yaw_reference.valid) {
@@ -806,8 +882,10 @@ static void process_gimbal_cmd(const MsgEvent *ev, void *user) {
         PID_Reset(&motor->pid_inner);
         motor->angle_target = (float)motor->angle_raw;
       }
+      pitch_reset_control();
       s_yaw_reference.valid = false;
       s_yaw_mode_valid = false;
+      YawDamping_Reset(&s_yaw_damping);
       s_coupling_history_valid = false;
       command_axis(s_pitch_motor_id, 0);
       command_axis(s_yaw_motor_id, 0);

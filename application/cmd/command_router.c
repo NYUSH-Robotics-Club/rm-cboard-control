@@ -227,8 +227,13 @@ static void route_gimbal(CommandRouter *router,
 
     if (input->vision_updated) {
         command->vision_ts_ms = now_ms;
+        ++command->vision_frame;
         if (input->vision.valid &&
-            input->vision.target_state != VISION_TARGET_NONE) {
+            input->vision.schema_version == VISION_TARGET_SCHEMA_VERSION &&
+            isfinite(input->vision.yaw_error_rad) &&
+            isfinite(input->vision.pitch_error_rad) &&
+            (input->vision.target_state == VISION_TARGET_CONVERGING ||
+             input->vision.target_state == VISION_TARGET_READY)) {
             command->vision_valid = true;
             command->vision_yaw_err_rad = input->vision.yaw_error_rad;
             command->vision_pitch_err_rad = input->vision.pitch_error_rad;

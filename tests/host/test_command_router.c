@@ -80,9 +80,38 @@ static void test_encoder_follow(void)
     assert(!output.chassis.enabled && !output.gimbal.enabled);
 }
 
+static void test_vision_frames(void) {
+    CommandRouter router;
+    CommandRouterInput input={0};
+    CommandRouterOutput output;
+    CommandRouter_Init(&router);
+    input.remote_online=true;
+    input.remote.rc.s[0]=input.remote.rc.s[1]=RC_SW_DOWN;
+    input.vision_updated=true;
+    input.vision=(VisionTargetMessage){.schema_version=VISION_TARGET_SCHEMA_VERSION,
+        .valid=true,.target_state=VISION_TARGET_READY,.yaw_error_rad=.1f,.pitch_error_rad=-.2f};
+    CommandRouter_Route(&router,&input,100,&output);
+    assert(output.gimbal.vision_valid && output.gimbal.vision_frame==1);
+    assert(output.gimbal.vision_pitch_err_rad==-.2f);
+    CommandRouter_Route(&router,&input,100,&output);
+    assert(output.gimbal.vision_frame==2); /* Same ms, new received frame. */
+    input.vision_updated=false;
+    CommandRouter_Route(&router,&input,120,&output);
+    assert(output.gimbal.vision_valid && output.gimbal.vision_frame==2);
+    CommandRouter_Route(&router,&input,121,&output);
+    assert(!output.gimbal.vision_valid);
+    input.vision_updated=true;input.vision.pitch_error_rad=NAN;
+    CommandRouter_Route(&router,&input,122,&output);
+    assert(!output.gimbal.vision_valid);
+    input.vision.pitch_error_rad=0;input.vision.schema_version=0;
+    CommandRouter_Route(&router,&input,123,&output);
+    assert(!output.gimbal.vision_valid);
+}
+
 int main(void)
 {
     test_encoder_follow();
+    test_vision_frames();
     CommandRouter router;
     CommandRouterInput input;
     CommandRouterOutput output;

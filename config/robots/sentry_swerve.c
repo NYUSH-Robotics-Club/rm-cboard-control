@@ -28,6 +28,10 @@ static const YawControlConfig s_yaw_control = {
     .near_speed_rpm = 10.0f,
     .brake_speed_rpm = 10.0f,
     .near_damping_gain = 0.35f,
+    /* 近端阻尼平滑与高速制动保持；不改变分段速度上限。 */
+    .near_damping_blend_deg = 0.0f,
+    .near_brake_release_rpm = 0.0f,
+    .near_brake_full_rpm = 0.0f,
     .approach_error_deg = 30.0f,
     .approach_speed_rpm = 30.0f,
     .approach_damping_gain = 0.35f,

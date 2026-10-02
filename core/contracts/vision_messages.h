@@ -39,6 +39,8 @@ typedef struct {
     uint16_t field_flags;
     uint32_t sequence;
     uint32_t source_timestamp_ms;
+    /* 相对接收时轴位置的角度误差；正值增加该轴编码目标，非摇杆量。
+     * 相机坐标到电机编码方向的转换由发送端/适配器负责，须实车核对。 */
     float yaw_error_rad;
     float pitch_error_rad;
     float distance_m;

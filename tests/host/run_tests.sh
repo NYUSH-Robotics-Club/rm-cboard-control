@@ -48,7 +48,7 @@ common_flags="-std=c11 -Wall -Wextra -Werror"
   -I"$repo_root/modules/debug_print" -I"$repo_root/modules/remote" -I"$repo_root/modules/logger" \
   -I"$repo_root/modules/message_center" -I"$repo_root/services/motor" \
   -I"$repo_root/application/dashboard" "$repo_root/tests/host/stubs/dashboard.c" \
-  "$repo_root/application/gimbal/gimbal_controller.c" "$repo_root/application/gimbal/yaw_reference.c" \
+  "$repo_root/application/gimbal/pitch_control_math.c" "$repo_root/application/gimbal/yaw_damping.c" "$repo_root/application/gimbal/gimbal_controller.c" "$repo_root/application/gimbal/yaw_reference.c" \
   "$repo_root/application/shoot/shooter_controller.c" \
   "$repo_root/modules/algorithm/pid.c" "$repo_root/modules/message_center/message_center.c" \
   "$repo_root/bsp/critical/bsp_critical.c" "$repo_root/config/robots/infantry_standard.c" \
@@ -228,4 +228,14 @@ done
 "$test_build/test_motor_adapters"
 "$test_build/test_robot_config_infantry_standard"
 "$test_build/test_robot_config_sentry_swerve"
+
+"$cc" $common_flags -I"$repo_root/application/gimbal" -I"$repo_root/config" \
+  -I"$repo_root/core/contracts" -I"$repo_root/core/common" \
+  "$repo_root/application/gimbal/yaw_damping.c" "$repo_root/tests/host/test_yaw_damping.c" \
+  -lm -o "$test_build/test_yaw_damping"
+"$test_build/test_yaw_damping"
+"$cc" $common_flags -I"$repo_root/application/gimbal" -I"$repo_root/config" \
+  "$repo_root/application/gimbal/pitch_control_math.c" "$repo_root/tests/host/test_pitch_control_math.c" \
+  -lm -o "$test_build/test_pitch_control_math"
+"$test_build/test_pitch_control_math"
 echo "host tests: PASS"

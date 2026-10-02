@@ -181,6 +181,17 @@ static void test_latest_pending(const RobotConfig_t *robot) {
  assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK);
  expect(3,BSP_CAN_CHANNEL_1,0x2fe,0,0);
  count=0;
+ /* CAN2 pitch slot coalesces to latest voltage command while hardware is busy. */
+ assert(CAN_Manager_Init(&can2_manager,CAN_CHANNEL_2,&handles[1],robot,&registries[1])==HAL_OK);
+ submit_result=BSP_CAN_TX_BUSY;
+ assert(CAN_Manager_SendMotorCurrent(&can2_manager,8,100)==HAL_OK);
+ assert(CAN_Manager_FlushTx(&can2_manager)==HAL_BUSY);
+ assert(CAN_Manager_SendMotorCurrent(&can2_manager,8,-300)==HAL_OK);
+ submit_result=BSP_CAN_TX_ACCEPTED;
+ assert(CAN_Manager_FlushTx(&can2_manager)==HAL_OK);
+ expect(0,BSP_CAN_CHANNEL_2,0x1ff,3,-300);
+ assert(CAN_Manager_FlushTx(&can2_manager)==HAL_OK && count==1);
+ count=0;
  puts("DJI latest pending: PASS (busy/error retry, overwrite, shared slots, fault purge)");
 }
 

@@ -134,6 +134,9 @@ typedef struct {
     float near_speed_rpm;          /* 近目标/低速区的目标速度上限，单位RPM。 */
     float brake_speed_rpm;         /* 全误差区反向制动时的独立速度上限，单位RPM。 */
     float near_damping_gain;       /* 近目标/低速区的实际RPM阻尼系数。 */
+    float near_damping_blend_deg;  /* 近端边界两侧的过渡半宽（度）；0保留硬切换。 */
+    float near_brake_release_rpm;  /* 制动保持解除速度；与full同时为0关闭保持。 */
+    float near_brake_full_rpm;     /* 达到此实际RPM使用完整制动阻尼，须大于release。 */
     float approach_error_deg;      /* 进入接近/中速区的位置误差阈值，单位度。 */
     float approach_speed_rpm;      /* 接近/中速区的目标速度上限，单位RPM。 */
     float approach_damping_gain;   /* 接近/中速区的实际RPM阻尼系数。 */
@@ -141,6 +144,20 @@ typedef struct {
     PIDParams_t spin_pid_outer;    /* 小陀螺独立位置环；全零表示沿用电机PID。 */
     PIDParams_t spin_pid_inner;    /* 小陀螺独立速度环；全零表示沿用电机PID。 */
 } YawControlConfig;
+
+/* pitch只保留时间积分输入和单一速度阻尼；PID仍由电机配置提供。 */
+typedef struct {
+    float manual_rate_deg_s;       /* 满杆基础目标变化率，度/秒。 */
+    float manual_stick_gain;       /* 无量纲摇杆倍率。 */
+    float velocity_damping_gain;   /* 实际RPM阻尼；0关闭，须有限且非负。 */
+    float load_reference_ticks;    /* 拟合坐标原点，不是新的机械零点/限位。 */
+    float load_bias;               /* 原点负载电压指令刻度。 */
+    float load_slope_per_tick;     /* 电压指令刻度/编码刻度。 */
+    float load_min_ticks;          /* 实测拟合范围；范围外钳位，不改变目标限位。 */
+    float load_max_ticks;
+    float load_gain;               /* 拟合补偿启用比例[0,1]；0关闭。 */
+    float load_output_max;         /* 补偿绝对限幅，电压指令刻度；0关闭。 */
+} PitchControlConfig;
 
 /* 仅由云台应用在速度PID之后叠加，不改变PID算法或电调模式。 */
 typedef struct {
@@ -223,6 +240,7 @@ typedef struct {
      */
     PIDParams_t pid_outer;
     PIDParams_t pid_inner;
+    const PitchControlConfig *pitch_control; /* pitch必填；绝对限位仍由limits提供。 */
     const YawControlConfig *yaw_control; /* 仅yaw应用读取；缺配置时禁止yaw出力。 */
     GimbalFeedforwardConfig feedforward; /* yaw/pitch前馈；省略时全零关闭。 */
 } MotorConfig_t;

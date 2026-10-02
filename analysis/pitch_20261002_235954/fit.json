@@ -1,0 +1,144 @@
+{
+  "source": "monitor/logger_20261002_235954_867422.txt",
+  "sha256": "b4e6c79ff07fa58e801401825f08de392c1b877943d7f3718d5870bbb098fd3b",
+  "normalization": "x=(actual_ticks-1971)/1000",
+  "points": [
+    {
+      "start_ms": 32863.0,
+      "end_ms": 37417.0,
+      "target_ticks": 1967.6239583232,
+      "actual_ticks": 1964.0,
+      "command": 549.0,
+      "command_min": 517.0,
+      "command_max": 581.0,
+      "n": 157
+    },
+    {
+      "start_ms": 38230.0,
+      "end_ms": 44941.0,
+      "target_ticks": 1616.5470486072888,
+      "actual_ticks": 1656.0,
+      "command": -4683.0,
+      "command_min": -4961.0,
+      "command_max": -4265.0,
+      "n": 253
+    },
+    {
+      "start_ms": 45205.0,
+      "end_ms": 51035.0,
+      "target_ticks": 1695.251736120889,
+      "actual_ticks": 1702.0,
+      "command": -2135.0,
+      "command_min": -2269.0,
+      "command_max": -2026.0,
+      "n": 213
+    },
+    {
+      "start_ms": 51322.0,
+      "end_ms": 55744.0,
+      "target_ticks": 1753.2168402716443,
+      "actual_ticks": 1768.9999999886224,
+      "command": -1772.0,
+      "command_min": -1985.0,
+      "command_max": -1601.0,
+      "n": 152
+    },
+    {
+      "start_ms": 56095.0,
+      "end_ms": 60760.0,
+      "target_ticks": 1844.3961805482666,
+      "actual_ticks": 1846.0,
+      "command": -139.0,
+      "command_min": -144.0,
+      "command_max": 0.0,
+      "n": 162
+    },
+    {
+      "start_ms": 60958.0,
+      "end_ms": 65226.0,
+      "target_ticks": 1900.7465277667554,
+      "actual_ticks": 1898.0,
+      "command": 317.0,
+      "command_min": 295.0,
+      "command_max": 345.0,
+      "n": 144
+    },
+    {
+      "start_ms": 65534.0,
+      "end_ms": 69846.0,
+      "target_ticks": 2122.749479162311,
+      "actual_ticks": 2095.000000011378,
+      "command": 3255.5,
+      "command_min": 3048.0,
+      "command_max": 3441.0,
+      "n": 146
+    },
+    {
+      "start_ms": 70110.0,
+      "end_ms": 75258.0,
+      "target_ticks": 2374.0,
+      "actual_ticks": 2316.0,
+      "command": 7427.0,
+      "command_min": 7139.0,
+      "command_max": 7600.0,
+      "n": 184
+    },
+    {
+      "start_ms": 75588.0,
+      "end_ms": 79878.0,
+      "target_ticks": 2231.7199652864,
+      "actual_ticks": 2220.0,
+      "command": 3171.0,
+      "command_min": 3171.0,
+      "command_max": 3366.0,
+      "n": 146
+    },
+    {
+      "start_ms": 80076.0,
+      "end_ms": 84542.0,
+      "target_ticks": 2161.1819444451558,
+      "actual_ticks": 2144.999999988622,
+      "command": 1813.0,
+      "command_min": 1610.0,
+      "command_max": 1953.0,
+      "n": 153
+    },
+    {
+      "start_ms": 84695.0,
+      "end_ms": 91494.0,
+      "target_ticks": 2374.0,
+      "actual_ticks": 2318.0,
+      "command": 7081.0,
+      "command_min": 6593.0,
+      "command_max": 7288.0,
+      "n": 257
+    }
+  ],
+  "models": {
+    "1": {
+      "coefficients": [
+        1016.2474825325193,
+        14942.651985130218
+      ],
+      "rmse": 990.3047527056325,
+      "loo_rmse": 1240.5918522184543,
+      "max_residual": 1803.2689277751633
+    },
+    "2": {
+      "coefficients": [
+        745.2257392526387,
+        14658.568267668856,
+        5257.187048628176
+      ],
+      "rmse": 966.7195378326553,
+      "loo_rmse": 1428.696958807843,
+      "max_residual": 1641.9832127236887
+    }
+  },
+  "selected_degree": 1,
+  "valid_ticks": [
+    1656.0,
+    2318.0
+  ],
+  "limitations": "Equal weight per hold; friction/hysteresis and changing I contaminate equilibrium. No endpoint extrapolation; no force/current conversion."
+}

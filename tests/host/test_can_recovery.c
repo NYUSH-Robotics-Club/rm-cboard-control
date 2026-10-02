@@ -133,6 +133,16 @@ static void test_single_flight(void) {
  /* Same ID on another bus is independent. */
  chosen_mailbox=0;
  assert(BspCan_TryWrite(BSP_CAN_CHANNEL_2,0x2fe,data,8)==BSP_CAN_TX_ACCEPTED);
+ /* CAN2 uses the same in-flight/retry stop handling after enabling retransmission. */
+ before=writes;
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_2,0x2fe,data,8)==BSP_CAN_TX_BUSY);
+ assert(writes==before);
+ abort_completes=0; before=aborts;
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_2,0x2fe,zero,8)==BSP_CAN_TX_BUSY);
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_2,0x2fe,zero,8)==BSP_CAN_TX_BUSY);
+ assert(aborts==before+1);
+ finish_mailbox(&hcan2,0); abort_completes=1;
+ assert(BspCan_TryWrite(BSP_CAN_CHANNEL_2,0x2fe,zero,8)==BSP_CAN_TX_ACCEPTED);
  finish_mailbox(&hcan1,0);
  assert(BspCan_TryWrite(BSP_CAN_CHANNEL_1,0x2fe,data,8)==BSP_CAN_TX_ACCEPTED);
  /* A stop aborts once, never overwrites an in-flight mailbox directly. */

@@ -338,6 +338,8 @@ set(APPLICATION_SOURCES
     application/shoot/shooter_controller.c
     application/gimbal/gimbal_controller.c
     application/gimbal/yaw_reference.c
+    application/gimbal/yaw_damping.c
+    application/gimbal/pitch_control_math.c
     application/dashboard/dashboard.c
 )
 

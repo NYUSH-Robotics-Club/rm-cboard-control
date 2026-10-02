@@ -31,23 +31,45 @@ static const YawControlConfig s_yaw_control = {
     .manual_speed_rpm = 50.0f,
     .vision_speed_rpm = 50.0f,
     .spin_speed_rpm = 15.0f,
-    .speed_loop_only = false, /* 步兵暂时旁路位置环；哨兵保留串级。 */
+    .speed_loop_only = false, /* false：执行位置/速度串级闭环。 */
     .brake_speed_rpm = 40.0f,/*全阶段反向制动上限，单位RPM*/
 
     /* 低速/近目标：按真实目标误差限速，优先抑制小角度换向过冲。 */
     .near_error_deg = 8.0f,/*近目标判定阈值*/
     .near_speed_rpm = 12.0f,
     
-    .near_damping_gain = 1.00f,
+    .near_damping_gain = 0.60f,
+    /* 近端阻尼平滑与高速制动保持；不改变分段速度上限。 */
+    .near_damping_blend_deg = 3.0f,
+    .near_brake_release_rpm = 8.0f,
+    .near_brake_full_rpm = 20.0f,
     /* 中速/接近：适度限速，兼顾跟手和刹车。 */
-    .approach_error_deg = 45.0f,/*中目标判定阈值*/
-    .approach_speed_rpm = 35.0f,
-    .approach_damping_gain = 0.85f,
+    .approach_error_deg = 55.0f,/*中目标判定阈值*/
+    .approach_speed_rpm = 30.0f,
+    .approach_damping_gain = 1.00f,
     /* 高速/远距离：沿用manual/vision速度上限。 */
     .far_damping_gain = 0.60f,
     /* Spin hold is deliberately softer than manual yaw to avoid chatter. */
     .spin_pid_outer = {0.025f, 0.0f, 0.0f, 1000.0f, 20.0f},
     .spin_pid_inner = {240.0f, 5.0f, 0.0f, 14000.0f, 300.0f}
+};
+
+/* Pitch遥控与yaw同样按时间积分，实际目标仍受绝对机械限位约束。
+ * 满杆角速度=manual_rate_deg_s*manual_stick_gain；PID及电压协议不复制yaw。 */
+static const PitchControlConfig s_pitch_control = {
+    .manual_rate_deg_s = 1200.0f,
+    .manual_stick_gain = 0.3f,
+    /* 从位置环速度目标中扣除gain*实际RPM；不再按位置误差分段。 */
+    .velocity_damping_gain = 0.60f,
+    /* 保持数据拟合见analysis/pitch_20261002_235954；包含摩擦和重力，非纯弹簧力。
+     * 交叉验证误差约1241刻度，双向负载尚未验证，当前关闭；保留拟合供后续标定。 */
+    .load_reference_ticks = 1971.0f,
+    .load_bias = 1016.2475f,
+    .load_slope_per_tick = 14.942652f,
+    .load_min_ticks = 1656.0f,
+    .load_max_ticks = 2318.0f,
+    .load_gain = 0.0f,
+    .load_output_max = 6000.0f,
 };
 
 /**
@@ -202,7 +224,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         // 位置环参数保留；speed_loop_only=true时不执行，恢复后输出仍受模式限速。
         .pid_outer = {0.1f, 0.0f, 0.0f, 2200.0f, 100.0f},
         // 速度误差为RPM、输出为电流原始刻度；保留当前用户PID，反馈失联仍归零。
-        .pid_inner = {300.0f, 60.0f, 0.0f, 12000.0f, 1000.0f}
+        .pid_inner = {200.0f, 60.0f, 0.0f, 12000.0f, 1000.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。
@@ -211,6 +233,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .vendor = MOTOR_VENDOR_DJI,
         .type = MOTOR_TYPE_GM6020,
         .role = MOTOR_ROLE_GIMBAL_PITCH,
+        .pitch_control = &s_pitch_control,
         .feedforward = {.velocity_gain = 0.0f, .bias = 0.0f, .output_max = 0.0f},
         .control_mode = MOTOR_CONTROL_APPLICATION,
         .can_channel = CAN_CHANNEL_2,
@@ -230,7 +253,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
             },
         // Conservative pitch startup values; raise one gain at a time after a guarded test.
         .pid_outer = {1.0f, 0.0f, 0.0f, 300.0f, 0.0f},
-        .pid_inner = {25.0f, 0.0f, 0.0f, 8000.0f, 2000.0f}
+        .pid_inner = {100.0f, 5.0f, 0.0f, 8000.0f, 500.0f}
     }};
 
 /* 用户确认：X形±45°，前后/左右轮中心距均0.54m，轮半径0.07m，M3508 P19。
