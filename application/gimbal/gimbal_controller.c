@@ -487,6 +487,13 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
   }
  speed_target = fmaxf(-rpm_limit, fminf(speed_target, rpm_limit));
 
+  /* Validate even at standstill, where the zero-output path skips the PID. */
+  float feedforward;
+  if (!calculate_feedforward(&yaw->config->feedforward, speed_target, &feedforward)) {
+    yaw_invalidate();
+    return 0;
+  }
+
   bool target_is_zero =
       fabsf(speed_target) <= YAW_TARGET_ZERO_EPS_RPM;
 
@@ -522,19 +529,20 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
   if (target_is_zero &&
       fabsf(speed_feedback) <= YAW_STOP_SPEED_EPS_RPM) {
     yaw_clear_speed_integral(inner_pid, speed_feedback);
+    /* This branch skips PID_Calculate; publish this sample, not its old target. */
+    inner_pid->target = speed_target;
+    inner_pid->actual = speed_feedback;
+    inner_pid->pout = 0.0f;
+    inner_pid->dt = 0.0f;
+    /* Restart must not integrate time spent in the stationary bypass. */
+    inner_pid->last_time_us = BspTime_NowUs();
 
     s_yaw_last_speed_target_rpm = speed_target;
     s_yaw_speed_target_valid = true;
     return 0;
   }
 
-  /* 用模式限速后的目标做前馈；速度环调试同样生效。 */
-  float feedforward;
-
-  if (!calculate_feedforward(&yaw->config->feedforward, speed_target, &feedforward)) {
-    yaw_invalidate();
-    return 0;
-  }
+  /* 用已校验且按模式限速后的目标做前馈；速度环调试同样生效。 */
   float current = PID_Calculate(inner_pid, speed_target, speed_feedback)
                 + feedforward;
   if (!isfinite(current)) {

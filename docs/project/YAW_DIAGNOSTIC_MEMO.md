@@ -875,3 +875,13 @@
   源码改动位于`application/gimbal/gimbal_controller.c`；未烧录。`CC=gcc sh tests/host/run_tests.sh`
   执行到既有`test_control_recovery.c:436`断言`yaw_control.speed_loop_only`失败后中止，该断言与本次
   SPIN rebase删除无关；`cmake --build build -j2`因build目录无CMake cache未执行有效编译。
+
+- 2026-10-02已将RTOS启动提交与SPIN行进提交合并为`9630342`：`Src/main.c`启动
+  `RobotRtos_Start()`，静态control任务承接原控制循环；保留SPIN的yaw相对角/短时RPM前馈、
+  独立外环/内环PID和2500ms退出制动。合并冲突按“RTOS启动 + SPIN控制路径”解决；主机回归
+  `CC=gcc sh tests/host/run_tests.sh`全部通过，`just build`因环境无`just`未执行，尚未烧录或实车验证。
+
+- 2026-10-02澄清工具环境：`just`并未丢失，二进制仍在`.firmware.local.json`指定的
+  `/home/nyu/.local/opt/rm-firmware/just-1.58.0/just`；此前直接运行命令未先执行
+  `source tools/activate.sh`，所以默认PATH找不到它。加载环境后`just doctor`通过，并完成
+  `just build infantry_standard`：ARM构建通过，RTOS符号完整，未烧录。

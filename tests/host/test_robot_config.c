@@ -74,8 +74,8 @@ int main(void)
     assert(pitch->can_tx_id == 0x1FF && pitch->tx_slot == 3);
     assert(pitch->protocol.dji.gm6020_mode == GM6020_COMMAND_VOLTAGE);
     assert(DjiMotor_CommandLimit(pitch) == 25000);
-    assert(pitch->limits.gm6020.angle_min == 1566.0f);
-    assert(pitch->limits.gm6020.angle_max == 2205.0f);
+    assert(pitch->limits.gm6020.angle_min == 1607.0f);
+    assert(pitch->limits.gm6020.angle_max == 2374.0f);
     assert(pitch->limits.gm6020.initial_angle == 1971.0f);
     assert(pitch->limits.gm6020.gravity_zero_angle == 1971.0f);
     assert(!pitch->limits.gm6020.enable_yaw_pitch_compensation);

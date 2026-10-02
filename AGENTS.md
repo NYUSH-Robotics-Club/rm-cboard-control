@@ -1,26 +1,26 @@
-# Project Working Agreement
+# Repository guidance
 
-Before changing this repository, read `docs/project/PROJECT_MEMO.md` completely. Treat it as
-the durable project memory for architecture decisions, hardware unknowns,
-compatibility requirements, and unfinished work.
+This is STM32F407 RoboMaster firmware. Read the relevant current document in
+`docs/README.md` for the task at hand. `docs/project/PROJECT_MEMO.md` holds a
+short list of durable constraints and open questions; consult it for control,
+hardware, architecture, and release work. Do not load historical Git revisions
+as current requirements.
 
-For every task:
-
-1. Read `docs/project/PROJECT_MEMO.md` before inspecting or editing implementation files.
-   During the current yaw investigation session, also read
-   `docs/project/YAW_DIAGNOSTIC_MEMO.md` before every task, including log analysis.
-   Update that memo before finishing work on this issue; keep observations tied to
-   their recording and distinguish source changes from flashed firmware.
-2. Preserve the dependency direction documented there.
-3. Do not invent CAN identifiers, feedback layouts, baud rates, or protocols for
-   hardware marked as unknown. Add an explicit unsupported adapter instead.
-4. The low-level baseline is frozen by user requirement. Never edit `Inc/`,
-   `Src/` (including `Src/main.c`), `Drivers/`, `Middlewares/`, the `.ioc` file,
-   startup assembly, linker script, or `cmake/stm32cubemx/CMakeLists.txt` unless
-   the user explicitly removes this restriction in a later request.
-5. Run the most relevant available build or static checks after changes.
-6. Before finishing, update `docs/project/PROJECT_MEMO.md` with decisions, changed interfaces,
-   validation performed, and remaining unknowns. Keep it concise and current.
-7. Follow `docs/project/COMMENTING_STANDARD.md`. New or changed upper-layer code
-   must use plain comments that explain purpose, units, ownership, and failure
-   behavior. Do not add comments to the frozen low-level baseline.
+- The current startup initializes hardware, then starts the static FreeRTOS control
+  task in `runtime/rtos/`. Supported configurations are `infantry_standard` and
+  `sentry_swerve`.
+- Keep the dependency direction in `docs/architecture/overview.md`. Unknown CAN
+  IDs, payloads, motor limits, geometry, and Jetson protocol details must stay
+  explicitly unsupported until specified and validated.
+- The low-level baseline is frozen: `Inc/`, `Src/`, `Drivers/`, `Middlewares/`,
+  `NYUSH_Infantry.ioc`, startup assembly, linker script, and
+  `cmake/stm32cubemx/CMakeLists.txt`. Change these only when the user explicitly
+  authorizes that scope. Earlier one-time exceptions do not carry forward.
+- For behavior changes, run the relevant host checks and build affected robot
+  configurations. Do not flash or move motors as an automatic check. Report
+  compilation, host tests, board verification, and observed behavior separately.
+- Update a maintained document only when its current instructions or facts
+  change. Keep dated logs and experiment narratives out of current guides; Git
+  history preserves old investigations. Do not append a task diary to the memo.
+- In changed upper-layer code, explain non-obvious units, ownership, and failure
+  behavior. Avoid comments that merely restate the code.

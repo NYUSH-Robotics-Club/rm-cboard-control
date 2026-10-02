@@ -54,7 +54,7 @@
 #include "cmd_controller.h"
 #include "vision_comm.h"
 #include "logger.h"
-#include "motor_offline_alarm.h"
+#include "robot_rtos.h"
 
 /* USER CODE END Includes */
 
@@ -68,7 +68,6 @@
 
 // Minimized delays for maximum response speed
 #define WAIT_ESC_BOOT_MS                (200U)  // Reduced from 500ms → 200ms
-#define CMD_REFRESH_INTERVAL_MS         (1U)    // 1000Hz main loop (reduced from 2ms for lower latency)
 // RC loss timeout for health gating
 #define RC_LOSS_TIMEOUT_MS              (200U)
 // USART6 hello message send interval
@@ -117,8 +116,6 @@ static void LED_SetRGB(uint8_t r, uint8_t g, uint8_t b);
 static void Gimbal_HoldPosition_Callback(void);
 static void on_rc_update(const MsgEvent *ev, void *user);
 
-SensorData sensor_data;
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -135,7 +132,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 }
 
 /**
- * @brief RC update callback for logging (runs in main loop context, not ISR)
+ * @brief RC update callback for logging (runs in dispatch context, not ISR)
  */
 static void on_rc_update(const MsgEvent *ev, void *user)
 {
@@ -146,7 +143,7 @@ static void on_rc_update(const MsgEvent *ev, void *user)
 
     
   /*这个只是日志打印，具体查看remote_control的定义*/
-    // Log RC data (safe to call in main loop context)
+    // Log RC data from the dispatch caller.
     LOG_CSV(LOG_TAG_RC, "%lu,%d,%d,%d,%d,%d,%u,%u",
             (unsigned long)s_rc_frame_counter,
             (int)rc->rc.ch[0], (int)rc->rc.ch[1],
@@ -337,7 +334,7 @@ int main(void)
   // === LED: WHITE - Final peripherals initialization ===
   LED_SetRGB(1, 1, 1);
 
-  // Subscribe to RC updates for logging (in main loop context, not ISR)
+  // Subscribe to RC updates for logging (in dispatch context, not ISR)
   MsgCenter_Subscribe(TOPIC_RC_UPDATE, on_rc_update, NULL);
 
   // Initialize Vision Communication
@@ -353,55 +350,32 @@ int main(void)
   // Disable half-transfer interrupt to reduce callback overhead
   __HAL_DMA_DISABLE_IT(WT61C_UART_HANDLE.hdmarx, DMA_IT_HT);
 
+  // Initialize optional application modules before their RTOS step runs.
+  RobotStatus app_runtime_status = AppRuntime_Init();
+  if (app_runtime_status != ROBOT_STATUS_OK) {
+    LOG_ERROR(LOG_TAG_SYS, "Optional application init failed: %d",
+              (int)app_runtime_status);
+  }
+
   LOG_INFO(LOG_TAG_SYS, "");
   LOG_INFO(LOG_TAG_SYS, "=== System Ready ===");
   LOG_INFO(LOG_TAG_SYS, "");
 
-  // === LED: GREEN - System ready, entering main loop ===
+  // === LED: GREEN - System ready, starting the RTOS scheduler ===
   LED_SetRGB(0, 1, 0);
+
+  // The static control task takes over the former main-loop work.
+  if (!RobotRtos_Start()) {
+    Error_Handler();
+  }
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  // CAN statistics logging
-  static uint32_t can_log_timer = 0;
-  static uint32_t last_can1_rx = 0;
-  static uint32_t last_can2_rx = 0;
-
   while (1)
   {
-    uint32_t current_tick = HAL_GetTick();
-
-    // Update sensor data and publishes IMU topic
-    gyro_data_update(&sensor_data);
-
-    CmdController_Task(current_tick);
-
-    // Dispatch message center events
-    MsgCenter_Dispatch();
-
-
-    MotorOfflineAlarm_Task(HAL_GetTick());
-
-    // CAN health check (1Hz)
-    if (current_tick - can_log_timer >= 1000) {
-      can_log_timer = current_tick;
-      uint32_t can1_delta = can1_manager.rx_frames - last_can1_rx;
-      uint32_t can2_delta = can2_manager.rx_frames - last_can2_rx;
-      last_can1_rx = can1_manager.rx_frames;
-      last_can2_rx = can2_manager.rx_frames;
-
-      LOG_CSV(LOG_TAG_CAN, "1,%u,0x%03X,%u,2,%u,0x%03X,%u",
-              can1_manager.rx_frames,
-              (unsigned int)can1_manager.last_rx_id,
-              (unsigned int)can1_delta,
-              can2_manager.rx_frames,
-              (unsigned int)can2_manager.last_rx_id,
-              (unsigned int)can2_delta);
-    }
-
-	  HAL_Delay(CMD_REFRESH_INTERVAL_MS);
+    // The scheduler should never return; failures are handled above.
     /* USER CODE END WHILE */
   }
     /* USER CODE BEGIN 3 */

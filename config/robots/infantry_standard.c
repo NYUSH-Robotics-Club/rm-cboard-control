@@ -1,12 +1,13 @@
 /*
  * 保存步兵全向轮机器人的几何、电机、方向、限幅和控制参数；修改后须重新编译验证。
- * yaw/pitch前馈在各轴.feedforward填写，默认全0关闭：
+ * yaw/pitch前馈在各轴.feedforward填写；当前yaw启用速度前馈，pitch关闭：
  *   ff = clamp(velocity_gain * speed_target_rpm + bias, ±output_max)。
- * velocity_gain单位为原始命令刻度/RPM；bias为有符号原始刻度，零速时也会出力。
+ * velocity_gain单位为原始命令刻度/RPM；bias为有符号原始刻度。
+ * yaw在目标零速且反馈已停稳时强制零输出；pitch没有这条bias抑制规则。
  * output_max填正数才启用，0关闭整项；速度目标取内环限速后的RPM，不额外乘direction。
  * yaw使用电流协议、pitch使用电压协议，系数不能互抄；前馈独立于PID，未知系数先填0。
  * pitch原重力补偿单独叠加，勿用bias重复补偿；失联或参数非法时双轴停止。
- * pitch限位填写绝对编码：angle_min=1566（最高），angle_max=2205（最低）。
+ * pitch限位填写绝对编码：angle_min=1607（最高），angle_max=2374（最低）。
  * initial_angle=1971为启动/重新对齐目标；必须在限位内，负数改为锁存当前位置。
  * gravity_zero_angle=1971为重力正弦项零点（绝对编码），独立于启动目标：
  *   gravity_ff = direction * gravity_compensation * sin((raw - gravity_zero_angle) * 2π / 8192)。
@@ -20,7 +21,7 @@
 
 static const ChassisFollowConfig s_chassis_follow = {
     .yaw_forward_ticks = 4890U, /* 用户确认的头朝前绝对编码。 */
-    .yaw_ccw_sign = -1,         /* 暂按增大为左转；安装方向尚待实车确认。 */
+    .yaw_ccw_sign = -1,         /* 编码增大对应的物理方向尚待实车确认。 */
 };
 
 /* 手动输入按度/秒积分；普通推杆与回中共用限速。 */
@@ -52,7 +53,7 @@ static const YawControlConfig s_yaw_control = {
  */
 static const MotorConfig_t g_motor_configs_infantry_standard[] = {
     // ========== CHASSIS MOTORS (4x M3508) ==========
-    // 右后轮：CAN1 硬件 ID 1，软件编号 1。
+    // 右前轮：CAN1 硬件 ID 1，软件编号 1。
     {
         .motor_id = 1, .offline_alarm_id = 1,
         .vendor = MOTOR_VENDOR_DJI,
@@ -69,7 +70,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}          // Not used
     },
 
-    // 右前轮：CAN1 硬件 ID 2，软件编号 2。
+    // 左前轮：CAN1 硬件 ID 2，软件编号 2。
     {.motor_id = 2, .offline_alarm_id = 2,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
@@ -84,7 +85,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_outer = {10.0f, 0.0f, 0.0f, 12000.0f, 3000.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // 左前轮：CAN1 硬件 ID 3，软件编号 3。
+    // 左后轮：CAN1 硬件 ID 3，软件编号 3。
     {.motor_id = 3, .offline_alarm_id = 3,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
@@ -99,7 +100,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_outer = {10.0f, 0.0f, 0.0f, 12000.0f, 3000.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // 左后轮：CAN1 硬件 ID 4，软件编号 4。
+    // 右后轮：CAN1 硬件 ID 4，软件编号 4。
     {.motor_id = 4, .offline_alarm_id = 4,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,

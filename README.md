@@ -13,11 +13,10 @@ Firmware and tooling for the NYUSH Robotics Club RoboMaster C Board (STM32F4).
 All maintained technical documentation is organized under [`docs/`](docs/README.md).
 The main entry points are:
 
-- **[Project memory](docs/project/PROJECT_MEMO.md)** — constraints, decisions, unknown hardware, and validation status
+- **[Project state](docs/project/PROJECT_MEMO.md)** — durable constraints and open questions
 - **[Architecture overview](docs/architecture/overview.md)** — current contracts, services, adapters, and extension rules
-- **[FreeRTOS runtime](docs/architecture/rtos-migration.md)** — runtime design; current startup remains bare-metal (see validation record)
-- **[Environment validation](docs/environment-validation.md)** — current build results and RTOS startup findings
-- **[Setup guide](docs/tutorials/setup-guide.md)** — development environment, build, and flashing
+- **[FreeRTOS runtime](docs/architecture/rtos-migration.md)** — scheduler, control task, and validation limits
+- **[Build and flash](docs/quickstart.md)** — environment setup and current commands
 - **[Message center](docs/protocols/message-center.md)** — publish/subscribe behavior and limits
 - **[Legacy vision protocol](docs/protocols/seasky-vision.md)** — current USB CDC/Seasky compatibility protocol
 
@@ -33,7 +32,7 @@ The main entry points are:
 - `Drivers/`, `Middlewares/` — STM32 libraries plus vendored FreeRTOS Kernel V11.3.0
 - `cmake/`, `CMakeLists.txt` — CMake configuration
 - `Debug/`, `build/` — build outputs (generated)
-- `docs/` — documentation index, project memory, architecture, guides, protocols, tutorials, and archive
+- `docs/` — maintained guides, architecture and protocol references
 - `tests/host/` — hardware-independent core tests
 
 ## Build & flash (summary)
@@ -41,13 +40,13 @@ The main entry points are:
 ### Build
 
 - Configure with the ARM toolchain and choose `infantry_standard` or `sentry_swerve`.
-- See the Setup Guide for toolchain requirements and the ARM build commands.
+- See the [build and flash guide](docs/quickstart.md) for toolchain setup and commands.
 
 ### Flash
 Use `just flash` with OpenOCD and ST-Link/SWD. It builds and checks the selected
 firmware, validates chip identity/capacity before erasing, and verifies the write.
-The default leaves the MCU halted after verification. `just doctor` and
-`just flash-plan` do not connect to or reset the MCU.
+The saved `run_after` setting controls whether a verified flash resets and runs
+the MCU. `just doctor` and `just flash-plan` do not connect to or reset it.
 
 OpenOCD is the recommended workflow, including Linux ARM64. pyOCD is an alternative
 for other workflows; CubeProgrammer is not recommended for this project's daily
