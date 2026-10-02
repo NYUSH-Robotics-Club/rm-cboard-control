@@ -49,8 +49,7 @@ static void command_axis(uint8_t id, int16_t command) {
 #define COMPENSATION_UPDATE_RATE_MS (100) // 更新补偿值的频率 100ms
 #define YAW_REVERSE_INTEGRAL_FACTOR (0.20f)
 #define YAW_TARGET_ZERO_EPS_RPM (0.5f)
-#define YAW_STOP_SPEED_EPS_RPM (1.0f)
-
+#define YAW_STOP_SPEED_EPS_RPM (1.5f)
 // Static state for application
 static GimbalCmd s_last_cmd;
 static SensorData s_last_sensor;
@@ -66,6 +65,52 @@ static bool s_spin_pid_valid;
 
 
 static void yaw_invalidate(void);
+
+/*
+ * Limit the position loop's speed target before the motor speed loop runs.
+ * The far zone keeps the configured tracking speed; the two inner zones
+ * reduce overshoot near a stationary target.  The caller owns the base limit.
+ */
+static float yaw_segmented_speed_limit(const YawControlConfig *cfg,
+                                       float base_limit_rpm,
+                                       float angle_error_ticks,
+                                       YawControlMode mode) {
+  if (!cfg || mode == YAW_CONTROL_SPIN || !isfinite(base_limit_rpm) ||
+      !isfinite(angle_error_ticks)) {
+    return base_limit_rpm;
+  }
+
+  float error_deg = fabsf(angle_error_ticks) * 360.0f / YAW_ENCODER_TICKS;
+  float limit_rpm = base_limit_rpm;
+  if (error_deg <= cfg->near_error_deg) {
+    limit_rpm = fminf(limit_rpm, cfg->near_speed_rpm);
+  } else if (error_deg <= cfg->approach_error_deg) {
+    limit_rpm = fminf(limit_rpm, cfg->approach_speed_rpm);
+  }
+  return limit_rpm;
+}
+
+/* Select the damping coefficient from the same position-error zones. */
+static float yaw_segmented_damping_gain(const YawControlConfig *cfg,
+                                        float angle_error_ticks) {
+  if (!cfg || !isfinite(angle_error_ticks)) return 0.0f;
+  float error_deg = fabsf(angle_error_ticks) * 360.0f / YAW_ENCODER_TICKS;
+  if (error_deg <= cfg->near_error_deg) return cfg->near_damping_gain;
+  if (error_deg <= cfg->approach_error_deg) return cfg->approach_damping_gain;
+  return cfg->far_damping_gain;
+}
+
+/* Select the target lead from the same low, middle and high speed zones. */
+static float yaw_segmented_target_lead(const YawControlConfig *cfg,
+                                       float angle_error_ticks) {
+  if (!cfg || !isfinite(angle_error_ticks)) return 0.0f;
+  float error_deg = fabsf(angle_error_ticks) * 360.0f / YAW_ENCODER_TICKS;
+  if (error_deg <= cfg->near_error_deg) return cfg->near_target_lead_deg;
+  if (error_deg <= cfg->approach_error_deg) {
+    return cfg->approach_target_lead_deg;
+  }
+  return cfg->far_target_lead_deg;
+}
 
 /* 无历史状态：前馈取本次速度内环目标，单位是电机协议原始命令刻度。
  * 0限幅直接关闭；启用后的非法参数/计算结果交由调用方停止两轴并重新对齐。
@@ -358,11 +403,27 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
 /* 配置无效时禁止出力，不能静默回退到旧的按回调次数累加。 */
 static bool yaw_config_valid(const YawControlConfig *cfg) {
   return cfg && isfinite(cfg->manual_rate_deg_s) && cfg->manual_rate_deg_s > 0.0f &&
-      isfinite(cfg->target_lead_deg) && cfg->target_lead_deg > 0.0f &&
-      cfg->target_lead_deg <= 180.0f &&
       isfinite(cfg->manual_speed_rpm) && cfg->manual_speed_rpm > 0.0f &&
       isfinite(cfg->vision_speed_rpm) && cfg->vision_speed_rpm > 0.0f &&
-      isfinite(cfg->spin_speed_rpm) && cfg->spin_speed_rpm > 0.0f;
+      isfinite(cfg->spin_speed_rpm) && cfg->spin_speed_rpm > 0.0f &&
+      isfinite(cfg->far_damping_gain) && cfg->far_damping_gain >= 0.0f &&
+      isfinite(cfg->approach_damping_gain) && cfg->approach_damping_gain >= 0.0f &&
+      isfinite(cfg->near_damping_gain) && cfg->near_damping_gain >= 0.0f &&
+      isfinite(cfg->near_target_lead_deg) && cfg->near_target_lead_deg >= 0.0f &&
+      cfg->near_target_lead_deg <= 180.0f &&
+      isfinite(cfg->brake_speed_rpm) && cfg->brake_speed_rpm >= 0.0f &&
+      cfg->brake_speed_rpm >= cfg->near_speed_rpm &&
+      isfinite(cfg->approach_error_deg) && cfg->approach_error_deg > 0.0f &&
+      isfinite(cfg->near_error_deg) && cfg->near_error_deg >= 0.0f &&
+      cfg->near_error_deg <= cfg->approach_error_deg &&
+      isfinite(cfg->approach_speed_rpm) && cfg->approach_speed_rpm > 0.0f &&
+      isfinite(cfg->near_speed_rpm) && cfg->near_speed_rpm > 0.0f &&
+      cfg->near_speed_rpm <= cfg->approach_speed_rpm &&
+      isfinite(cfg->approach_target_lead_deg) &&
+      cfg->approach_target_lead_deg >= 0.0f &&
+      cfg->approach_target_lead_deg <= 180.0f &&
+      isfinite(cfg->far_target_lead_deg) && cfg->far_target_lead_deg >= 0.0f &&
+      cfg->far_target_lead_deg <= 180.0f;
 }
 
 static bool spin_pid_config_valid(const YawControlConfig *cfg) {
@@ -454,8 +515,11 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
   float rpm_limit = cfg->manual_speed_rpm;
   if (mode == YAW_CONTROL_MANUAL) {
     /* 新模式首帧不把上一模式的时间间隔积分到新目标。 */
+    float target_error_ticks = s_yaw_reference.target_ticks -
+                               s_yaw_reference.position_ticks;
+    float target_lead_deg = yaw_segmented_target_lead(cfg, target_error_ticks);
     YawReference_Advance(&s_yaw_reference, rate_normalized, cfg->manual_rate_deg_s,
-                          mode_changed ? 0.0f : dt_s, cfg->target_lead_deg);
+                          mode_changed ? 0.0f : dt_s, target_lead_deg);
   } else if (mode == YAW_CONTROL_VISION) {
     s_yaw_reference.target_ticks = s_yaw_reference.position_ticks +
         s_last_cmd.vision_yaw_err_rad * YAW_ENCODER_TICKS / (2.0f * (float)M_PI);
@@ -485,7 +549,29 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     speed_target = PID_CalculateDivided(outer_pid, 0.0f, -angle_error,
                                         PID_YAW_OUTER_DIVIDER);
   }
- speed_target = fmaxf(-rpm_limit, fminf(speed_target, rpm_limit));
+  if (mode != YAW_CONTROL_SPIN && !cfg->speed_loop_only) {
+    /*
+     * Actual RPM is used as damping, so a moving gimbal is slowed before its
+     * position error changes sign.  This applies to manual and vision yaw;
+     * spin keeps its separately tuned feedback path.
+     */
+    speed_target -= yaw_segmented_damping_gain(cfg, angle_error) * speed_feedback;
+  }
+  bool reverse_braking = mode != YAW_CONTROL_SPIN && !cfg->speed_loop_only &&
+                         fabsf(speed_feedback) > YAW_STOP_SPEED_EPS_RPM &&
+                         speed_target * speed_feedback < 0.0f;
+  float selected_rpm_limit = rpm_limit;
+  if (!cfg->speed_loop_only) {
+    rpm_limit = yaw_segmented_speed_limit(cfg, rpm_limit, angle_error, mode);
+    selected_rpm_limit = rpm_limit;
+    if (reverse_braking) {
+      /* Any manual/vision error zone may use the larger braking limit to shed
+       * existing angular momentum; normal tracking remains zone-limited. */
+      selected_rpm_limit = fmaxf(selected_rpm_limit, cfg->brake_speed_rpm);
+    }
+  }
+  speed_target = fmaxf(-selected_rpm_limit,
+                       fminf(speed_target, selected_rpm_limit));
 
   /* Validate even at standstill, where the zero-output path skips the PID. */
   float feedforward;

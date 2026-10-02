@@ -26,12 +26,25 @@ static const ChassisFollowConfig s_chassis_follow = {
 
 /* 手动输入按度/秒积分；普通推杆与回中共用限速。 */
 static const YawControlConfig s_yaw_control = {
-    .manual_rate_deg_s = 300.0f,
-    .target_lead_deg = 12.0f,
-    .manual_speed_rpm = 60.0f,
-    .vision_speed_rpm = 10.0f,
+    .manual_rate_deg_s = 1200.0f,
+    .manual_speed_rpm = 220.0f,
+    .vision_speed_rpm = 220.0f,
     .spin_speed_rpm = 15.0f,
     .speed_loop_only = false, /* 步兵暂时旁路位置环；哨兵保留串级。 */
+    /* 低速/近目标：小超前角，优先抑制小角度换向过冲。 */
+    .near_target_lead_deg = 4.5f,
+    .near_error_deg = 2.0f,/*近目标判定阈值*/
+    .near_speed_rpm = 10.0f,
+    .brake_speed_rpm = 40.0f,/*全阶段反向制动上限，单位RPM*/
+    .near_damping_gain = 1.00f,
+    /* 中速/接近：适度超前，兼顾跟手和刹车。 */
+    .approach_target_lead_deg = 8.0f,
+    .approach_error_deg = 8.0f,/*中目标判定阈值*/
+    .approach_speed_rpm = 30.0f,
+    .approach_damping_gain = 0.70f,
+    /* 高速/远距离：允许更大超前，沿用manual/vision速度上限。 */
+    .far_target_lead_deg = 12.0f,
+    .far_damping_gain = 0.15f,
     /* Spin hold is deliberately softer than manual yaw to avoid chatter. */
     .spin_pid_outer = {0.025f, 0.0f, 0.0f, 1000.0f, 20.0f},
     .spin_pid_inner = {240.0f, 5.0f, 0.0f, 14000.0f, 300.0f}
@@ -187,9 +200,9 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
             },
         .protocol.dji = {GM6020_COMMAND_CURRENT, 12000}, // 电流原始刻度，5460 约为 1 A。
         // 位置环参数保留；speed_loop_only=true时不执行，恢复后输出仍受模式限速。
-        .pid_outer = {0.065f, 0.0f, 0.0f, 2200.0f, 100.0f},
+        .pid_outer = {0.1f, 0.0f, 0.0f, 2200.0f, 100.0f},
         // 速度误差为RPM、输出为电流原始刻度；保留当前用户PID，反馈失联仍归零。
-        .pid_inner = {300.0f, 105.0f, 0.0f, 26000.0f, 4000.0f}
+        .pid_inner = {300.0f, 60.0f, 0.0f, 12000.0f, 1000.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。
@@ -216,8 +229,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                 .enable_yaw_pitch_compensation = false // 关闭yaw对pitch目标的耦合改写。
             },
         // Conservative pitch startup values; raise one gain at a time after a guarded test.
-        .pid_outer = {1.1f, 0.0f, 0.0f, 3000.0f, 0.0f},
-        .pid_inner = {60.0f, 0.0f, 0.0f, 5000.0f, 2000.0f}
+        .pid_outer = {1.0f, 0.0f, 0.0f, 300.0f, 0.0f},
+        .pid_inner = {25.0f, 0.0f, 0.0f, 8000.0f, 2000.0f}
     }};
 
 /* 用户确认：X形±45°，前后/左右轮中心距均0.54m，轮半径0.07m，M3508 P19。
