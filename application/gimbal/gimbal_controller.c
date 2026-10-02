@@ -41,7 +41,7 @@ static bool s_pitch_clock_valid;
 static bool s_pitch_vision_active;
 static uint32_t s_pitch_vision_frame;
 static uint32_t s_yaw_vision_frame;
-static bool s_pitch_limit_fault; /* 越界后须禁用再重新使能，禁止弹回范围后自动重启。 */
+static bool s_pitch_limit_fault; /* 越界恢复对齐到实测pitch，避免再次追向旧端点目标。 */
 
 static void pitch_reset_control(void) {
   s_pitch_clock_valid = false;
@@ -200,8 +200,8 @@ static bool capture_startup_position(void) {
   float pitch_target = pitch ? (float)pitch->angle_raw : 0.0f;
   if (pitch && pitch->config) {
     float pitch_angle = (float)pitch->angle_raw;
-    /* pitch每次对齐使用配置的绝对编码目标；负数保留锁存实测位置的行为。 */
-    if (pitch->config->limits.gm6020.initial_angle >= 0.0f)
+    /* 上电使用配置初始角；越界自动恢复锁定实测位置，丢弃故障前目标。 */
+    if (!s_pitch_limit_fault && pitch->config->limits.gm6020.initial_angle >= 0.0f)
       pitch_target = pitch->config->limits.gm6020.initial_angle;
     if (pitch_angle < pitch->config->limits.gm6020.angle_min ||
         pitch_angle > pitch->config->limits.gm6020.angle_max ||
@@ -236,6 +236,7 @@ static bool capture_startup_position(void) {
   }
 
   s_startup_position_captured = true;
+  s_pitch_limit_fault = false;
   return true;
 }
 
@@ -772,17 +773,19 @@ static void process_gimbal_cmd(const MsgEvent *ev, void *user) {
     uint32_t now_ms = BspTime_NowMs();
     bool fresh = axis_feedback_fresh(s_yaw_motor_id, now_ms) &&
                  axis_feedback_fresh(s_pitch_motor_id, now_ms);
-    if (!s_last_cmd.enabled) s_pitch_limit_fault=false;
-    else if (fresh && s_startup_position_captured && !pitch_position_safe())
-      s_pitch_limit_fault=true;
-    if (!fresh || !s_last_cmd.enabled || s_pitch_limit_fault) {
+    bool pitch_safe = fresh && pitch_position_safe();
+    if (!s_last_cmd.enabled) s_pitch_limit_fault = false;
+    else if (fresh && !pitch_safe) s_pitch_limit_fault = true;
+    /* 越界/反馈失联立即停止；连续100ms有效且在原限位内后自动重新对齐。
+     * 每次再次越界均重置等待，不能沿用越界前的稳定计时。 */
+    if (!fresh || !s_last_cmd.enabled || !pitch_safe) {
       s_feedback_stable_seen = false;
       s_startup_position_captured = false;
     } else if (!s_feedback_stable_seen) {
       s_feedback_stable_seen = true;
       s_feedback_stable_since_ms = now_ms;
     }
-    bool startup_ready = fresh && !s_pitch_limit_fault && s_feedback_stable_seen && pitch_position_safe() &&
+    bool startup_ready = fresh && pitch_safe && s_feedback_stable_seen &&
         (uint32_t)(now_ms - s_feedback_stable_since_ms) >= 100U &&
         (s_startup_position_captured || capture_startup_position());
 

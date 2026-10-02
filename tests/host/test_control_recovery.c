@@ -538,17 +538,30 @@ static void test_pitch_output_and_load(void) {
  now_ms+=4; pitch->last_feedback_time=now_ms;
  command=GimbalController_PitchControl(8,0,NULL,true);
  assert(command==8000);
- /* 越界停机锁存：回弹到安全范围也不得自动重新追向端点。 */
- pitch->angle_raw=1606;gimbal_step(now_ms+4,true,true);
- assert(outputs[5]==0 && outputs[8]==0);
- pitch->angle_raw=1700;
- for(unsigned i=0;i<40;i++)gimbal_step(now_ms+4,true,true);
- assert(outputs[5]==0 && outputs[8]==0);
- pitch->config=original; pitch->angle_raw=1971;
+ /* 两个端点均越界即停；安全区持续100ms才自动恢复到实测位置。 */
+ pitch->config=original;
+ for(unsigned endpoint=0;endpoint<2;endpoint++) {
+   pitch->angle_raw=endpoint?2375:1606;
+   gimbal_step(now_ms+4,true,true);
+   assert(outputs[5]==0 && outputs[8]==0 && !g_gimbal_monitor.startup_ready);
+   pitch->angle_raw=endpoint?2300:1700;
+   gimbal_step(now_ms+4,true,true);
+   for(unsigned i=0;i<24;i++)gimbal_step(now_ms+4,true,true);
+   assert(outputs[5]==0 && outputs[8]==0 && !g_gimbal_monitor.startup_ready);
+   /* 再次越界必须从头等待，不能跨越异常累计稳定时间。 */
+   pitch->angle_raw=endpoint?2375:1606;gimbal_step(now_ms+4,true,true);
+   pitch->angle_raw=endpoint?2300:1700;gimbal_step(now_ms+4,true,true);
+   for(unsigned i=0;i<24;i++)gimbal_step(now_ms+4,true,true);
+   assert(!g_gimbal_monitor.startup_ready);
+   gimbal_step(now_ms+4,true,true);
+   assert(g_gimbal_monitor.startup_ready);
+   assert(pitch->angle_target==pitch->angle_raw);
+ }
+ pitch->angle_raw=1971;
  gimbal_step(now_ms+4,false,true);gimbal_step(now_ms+4,true,true);
  gimbal_step(now_ms+100,true,true);
  assert(pitch->angle_target==1971);
- puts("pitch limit/load: PASS (unscaled PID, residual I, total cap, latched fault)");
+ puts("pitch limit/load: PASS (unscaled PID, residual I, total cap, timed automatic recovery)");
 }
 
 static void test_vision_targets(YawControlConfig *cfg) {
@@ -705,7 +718,7 @@ int main(void){
  motors[8].last_feedback_time=930;
  gimbal_step(930,true,false);
  assert(outputs[5]==0&&outputs[8]==0&&yaw->pid_inner.iout==0);
- /* 超出任一绝对边界均禁止启动双轴；进入范围后采用1971初始目标。 */
+ /* 超出任一绝对边界均禁止启动双轴；刚进入范围尚未稳定，不立即恢复。 */
  MotorContext_t *pitch=&motors[8];
  const float lower=pitch->config->limits.gm6020.angle_min;
  const float upper=pitch->config->limits.gm6020.angle_max;
@@ -715,7 +728,9 @@ int main(void){
  pitch->angle_raw=upper+1;
  gimbal_step(1104,true,true);assert(outputs[5]==0&&outputs[8]==0);
  pitch->angle_raw=lower;
- gimbal_step(1108,true,true);assert(pitch->angle_target==1971);
+ gimbal_step(1108,true,true);
+ assert(!g_gimbal_monitor.startup_ready && outputs[5]==0 && outputs[8]==0);
+ assert(pitch->angle_target==lower);
  SensorData sensor={0};
  pitch->angle_target=lower+4;
  for (unsigned i=0;i<10;i++) {
@@ -736,7 +751,8 @@ int main(void){
  (void)GimbalController_PitchControl(8,1,&sensor,true);
  assert(fabsf(pitch->angle_target-(upper-32.768f))<0.001f);
  gimbal_step(1201,true,false);assert(outputs[5]==0&&outputs[8]==0);
- /* 配置中的启动目标也须在范围内，恢复合法配置后可在边界启动。 */
+ /* 显式禁用后走正常启动路径，配置初始目标也须在范围内。 */
+ gimbal_step(1290,false,true);
  MotorConfig_t limited_pitch=*pitch->config;
  limited_pitch.limits.gm6020.initial_angle=upper+1;
  pitch->config=&limited_pitch;
