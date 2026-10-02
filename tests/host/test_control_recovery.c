@@ -583,6 +583,41 @@ static void test_vision_targets(YawControlConfig *cfg) {
  puts("vision targets: PASS (both axes, one target per frame, limits, handover, invalid input)");
 }
 
+static void test_spin_shared_control(YawControlConfig *cfg) {
+ YawControlConfig saved=*cfg;
+ cfg->speed_loop_only=false;cfg->manual_speed_rpm=50;
+ cfg->near_error_deg=8;cfg->approach_error_deg=55;
+ cfg->near_speed_rpm=4;cfg->approach_speed_rpm=30;cfg->brake_speed_rpm=9;
+ cfg->near_damping_gain=2;cfg->near_damping_blend_deg=0;
+ cfg->near_brake_release_rpm=cfg->near_brake_full_rpm=0;
+ MotorContext_t *yaw=&motors[5];
+ yaw->angle_raw=4000;motors[8].angle_raw=1971;
+ yaw->speed_rpm=100; /* 转子相对转速不可替代世界航向速度。 */
+ gimbal_step(now_ms+4,false,true);gimbal_step(now_ms+4,true,true);
+ gimbal_step(now_ms+100,true,true);
+ PID_Init(&yaw->pid_outer,.5f,0,0,600,0);
+ PID_Init(&yaw->pid_inner,2,0,0,12000,0);
+ yaw->pid_outer.output_lpf_rc=yaw->pid_inner.output_lpf_rc=0;
+ SensorData sensor={.yaw_total_angle=0,.g_gz=3*(float)M_PI/30};
+ GimbalCmd cmd={.enabled=true,.yaw_rate_memo=1,.yaw_target_memo=1};
+ MsgCenter_Publish(TOPIC_IMU_UPDATE,&sensor,sizeof(sensor));MsgCenter_Dispatch();
+ for(unsigned i=0;i<10;i++)feedforward_step(cmd);
+ assert(fabsf(yaw->pid_inner.actual-3)<.001f);
+ assert(fabsf(yaw->pid_inner.target-4)<.001f); /* 共用近段上限。 */
+ assert(g_gimbal_monitor.yaw_pid_kp==2);
+ assert(fabsf(g_gimbal_monitor.yaw_pid_pout-2)<.001f);
+ assert(g_gimbal_monitor.yaw.flags&GIMBAL_MONITOR_SPEED_IMU);
+ sensor.g_gz=20*(float)M_PI/30;
+ MsgCenter_Publish(TOPIC_IMU_UPDATE,&sensor,sizeof(sensor));MsgCenter_Dispatch();
+ for(unsigned i=0;i<10;i++)feedforward_step(cmd);
+ assert(fabsf(yaw->pid_inner.target+9)<.001f); /* 共用阻尼和全阶段反向制动。 */
+ sensor.g_gz=NAN;
+ MsgCenter_Publish(TOPIC_IMU_UPDATE,&sensor,sizeof(sensor));MsgCenter_Dispatch();
+ feedforward_step(cmd);assert(outputs[5]==0 && outputs[8]==0);
+ *cfg=saved;
+ puts("spin shared control: PASS (motor PID, segmented limit, IMU damping, reverse cap, invalid feedback)");
+}
+
 int main(void){
  MsgEvent queue[32];
  MsgCenter_Init(queue,32);
@@ -759,7 +794,7 @@ int main(void){
  assert(yaw->angle_target==4555&&yaw->pid_inner.target==0);
  /* 重新启用位置路径后，跨半圈仍追原目标，而不是改为顺向加速。 */
  gimbal_step(1678,false,true);yaw_control.speed_loop_only=false;
- yaw_control.manual_speed_rpm=10;yaw_control.vision_speed_rpm=7;yaw_control.spin_speed_rpm=8;
+ yaw_control.manual_speed_rpm=10;yaw_control.vision_speed_rpm=7;
  gimbal_step(1682,true,true);gimbal_step(1782,true,true);
  for(unsigned k=1;k<=50;k++) {
    yaw->angle_raw=(uint16_t)((4555U+k*100U)%8192U);
@@ -780,7 +815,7 @@ int main(void){
  speed_cmd.vision_valid=false;speed_cmd.yaw_rate_memo=1;speed_cmd.yaw_target_memo=90;
  now_ms=1998;motors[5].last_feedback_time=motors[8].last_feedback_time=now_ms;
  MsgCenter_Publish(TOPIC_GIMBAL_CMD,&speed_cmd,sizeof(speed_cmd));MsgCenter_Dispatch();
- assert(g_gimbal_monitor.yaw.speed_target_rpm==8);
+ assert(g_gimbal_monitor.yaw.speed_target_rpm==10);
  /* spin世界航向超过半圈时仍保持所选圈数，不逐轮改走另一方向。 */
  sensor.yaw_total_angle=300;
  for(unsigned k=0;k<5;k++) {
@@ -788,7 +823,7 @@ int main(void){
    MsgCenter_Publish(TOPIC_IMU_UPDATE,&sensor,sizeof(sensor));
    MsgCenter_Publish(TOPIC_GIMBAL_CMD,&speed_cmd,sizeof(speed_cmd));MsgCenter_Dispatch();
  }
- assert(g_gimbal_monitor.yaw.speed_target_rpm==-8);
+ assert(g_gimbal_monitor.yaw.speed_target_rpm==-10);
  gimbal_step(2022,true,true);assert(yaw->angle_target==yaw->angle_raw&&
                                       g_gimbal_monitor.yaw.speed_target_rpm==0);
  assert(g_gimbal_monitor.yaw.speed_target_rpm == 0 && g_gimbal_monitor.yaw_pid_pout == 0);
@@ -810,6 +845,7 @@ int main(void){
  test_pitch_coupling_switch();
  test_pitch_output_and_load();
  test_vision_targets(&yaw_control);
+ test_spin_shared_control(&yaw_control);
  test_shooter_interlock();
  test_feed_stall_recovery();
  test_feed_custom_threshold();

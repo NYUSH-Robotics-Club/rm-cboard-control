@@ -126,9 +126,8 @@ typedef struct {
 typedef struct {
     float manual_rate_deg_s;       /* 满杆目标角速度；速度调试时除以6得到RPM。 */
     float manual_stick_gain;       /* 手动摇杆输入放大倍数；1.0表示不放大。 */
-    float manual_speed_rpm;        /* 普通推杆和回中共用的速度上限。 */
+    float manual_speed_rpm;        /* 普通推杆、回中和小陀螺稳头共用的速度上限。 */
     float vision_speed_rpm;        /* 明确进入视觉模式时的速度上限。 */
-    float spin_speed_rpm;          /* 明确进入spin模式时的速度上限。 */
     bool speed_loop_only;          /* true：暂时旁路位置环，只调电机RPM速度环。 */
     float near_error_deg;          /* 进入近目标/低速区的位置误差阈值，单位度。 */
     float near_speed_rpm;          /* 近目标/低速区的目标速度上限，单位RPM。 */
@@ -141,8 +140,6 @@ typedef struct {
     float approach_speed_rpm;      /* 接近/中速区的目标速度上限，单位RPM。 */
     float approach_damping_gain;   /* 接近/中速区的实际RPM阻尼系数。 */
     float far_damping_gain;        /* 远距离/高速区的实际RPM阻尼系数。 */
-    PIDParams_t spin_pid_outer;    /* 小陀螺独立位置环；全零表示沿用电机PID。 */
-    PIDParams_t spin_pid_inner;    /* 小陀螺独立速度环；全零表示沿用电机PID。 */
 } YawControlConfig;
 
 /* pitch只保留时间积分输入和单一速度阻尼；PID仍由电机配置提供。 */

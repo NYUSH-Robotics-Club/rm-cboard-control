@@ -55,7 +55,7 @@
 
 - 当前合并保留 SPIN 行进控制：`command_router` 使用 yaw 编码器相对角和短时 RPM 前馈
   旋转底盘平移向量，并保留关闭小陀螺后的 yaw 制动窗口；`gimbal_controller` 使用
-  独立的 SPIN 外环/内环 PID。该控制路径与 RTOS 控制任务共用原有调用顺序，合并时
+  与普通遥控共用的 yaw PID、分段限速、阻尼和反向制动；SPIN保留世界航向及IMU速度反馈。该控制路径与 RTOS 控制任务共用原有调用顺序，合并时
   尚未完成 ARM 固件构建、烧录或实车验证。
 
 - 2026-10-02合并后已通过`source tools/activate.sh && just build infantry_standard`：ARM

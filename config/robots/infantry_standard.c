@@ -30,7 +30,6 @@ static const YawControlConfig s_yaw_control = {
     .manual_stick_gain = 0.3f,
     .manual_speed_rpm = 50.0f,
     .vision_speed_rpm = 50.0f,
-    .spin_speed_rpm = 15.0f,
     .speed_loop_only = false, /* false：执行位置/速度串级闭环。 */
     .brake_speed_rpm = 40.0f,/*全阶段反向制动上限，单位RPM*/
 
@@ -49,9 +48,6 @@ static const YawControlConfig s_yaw_control = {
     .approach_damping_gain = 1.00f,
     /* 高速/远距离：沿用manual/vision速度上限。 */
     .far_damping_gain = 0.60f,
-    /* Spin hold is deliberately softer than manual yaw to avoid chatter. */
-    .spin_pid_outer = {0.025f, 0.0f, 0.0f, 1000.0f, 20.0f},
-    .spin_pid_inner = {240.0f, 5.0f, 0.0f, 14000.0f, 300.0f}
 };
 
 /* Pitch遥控与yaw同样按时间积分，实际目标仍受绝对机械限位约束。
