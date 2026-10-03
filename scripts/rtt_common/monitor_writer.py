@@ -12,6 +12,7 @@ from typing import Iterable
 from scripts.rtt_common.telemetry import (
     PITCH_DIAGNOSTIC_FIELDS,
     TRACE_METADATA_FIELDS,
+    CAN_DEADLINE_FIELDS,
     TelemetryFrame,
     YAW_DIAGNOSTIC_FIELDS,
 )
@@ -105,7 +106,7 @@ MONITOR_COLUMNS = (
     "chassis_current_actual_raw_0", "chassis_current_actual_raw_1", "chassis_current_actual_raw_2", "chassis_current_actual_raw_3",
     "rc_rocker_r_x", "rc_rocker_r_y", "rc_rocker_l_x", "rc_rocker_l_y", "rc_dial", "rc_switches",
     "gimbal_yaw_encoder_raw", "telemetry_drop_count",
-) + YAW_DIAGNOSTIC_FIELDS + ("yaw_rc_age_ms", "yaw_command_age_ms", "yaw_feedback_age_ms") + PITCH_DIAGNOSTIC_FIELDS + TRACE_METADATA_FIELDS
+) + YAW_DIAGNOSTIC_FIELDS + ("yaw_rc_age_ms", "yaw_command_age_ms", "yaw_feedback_age_ms") + PITCH_DIAGNOSTIC_FIELDS + TRACE_METADATA_FIELDS + CAN_DEADLINE_FIELDS
 
 
 def resolve_monitor_dir(path: str | Path) -> Path:
@@ -232,7 +233,7 @@ def _frame_row_values(frame: TelemetryFrame) -> tuple[object, ...]:
         _age_ms(frame.yaw_sample_ms, frame.yaw_rc_dispatch_ms),
         _age_ms(frame.yaw_sample_ms, frame.yaw_route_ms),
         _age_ms(frame.yaw_sample_ms, frame.yaw_feedback_ms),
-    ) + tuple(getattr(frame, name) for name in PITCH_DIAGNOSTIC_FIELDS) + tuple(getattr(frame, name) for name in TRACE_METADATA_FIELDS)
+    ) + tuple(getattr(frame, name) for name in PITCH_DIAGNOSTIC_FIELDS) + tuple(getattr(frame, name) for name in TRACE_METADATA_FIELDS) + tuple(getattr(frame, name) for name in CAN_DEADLINE_FIELDS)
 
 
 class MonitorWriter:
@@ -259,7 +260,13 @@ class MonitorWriter:
                 for ms, seq, tagged_kind, raw, detail in frame.yaw_transport_events:
                     kind = tagged_kind & 255
                     mailbox = ((tagged_kind >> 8) & 3) - 1
-                    row = prefix + (ms, seq, kind, mailbox, raw, detail)
+                    event_prefix = prefix
+                    if 10 <= kind <= 15:
+                        bus, tx_id, slot = (detail >> 24) & 255, (detail >> 8) & 65535, detail & 255
+                        mailbox = -1 if kind == 10 else slot
+                        event_prefix = (frame.host_rx_ms, frame.seq, bus, tx_id, -1,
+                                        slot if kind == 10 else -1, frame.yaw_transport_lost)
+                    row = event_prefix + (ms, seq, kind, mailbox, raw, detail)
                     event_lines.append("\t".join(str(value) for value in row))
                 self._trace_handle.write("\n".join(event_lines) + "\n")
             values = _frame_row_values(frame)

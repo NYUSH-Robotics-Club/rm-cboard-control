@@ -125,7 +125,9 @@ void CmdController_Task(uint32_t current_tick) {
     if (!s_initialized) {
         return;
     }
-    BspCan_Service(current_tick);
+    /* Optional modules may submit CAN after the cycle-start timestamp.
+     * Use the current HAL/BSP clock so mailbox ages cannot underflow. */
+    BspCan_Service(BspTime_NowMs());
 
     if (s_remote_updated) {
         s_remote_updated = false;

@@ -30,7 +30,7 @@ class DashboardTests(unittest.TestCase):
         includes = ['config', 'config/robots', 'core/common', 'core/contracts', 'core/motor',
                     'application/dashboard', 'application/gimbal', 'application/chassis',
                     'modules/algorithm', 'modules/message_center', 'modules/motor', 'services/motor',
-                    'bsp/time', 'bsp/critical', 'third_party/SEGGER/RTT', 'third_party/SEGGER/Config']
+                    'bsp/time', 'bsp/can', 'bsp/critical', 'third_party/SEGGER/RTT', 'third_party/SEGGER/Config']
         exe = cls.directory / 'fixture'
         subprocess.run(['gcc', '-std=c11', '-Wall', '-Wextra', '-Werror',
                         '-DROBOT_TYPE_infantry_standard', *['-I' + p for p in includes],
@@ -44,8 +44,10 @@ class DashboardTests(unittest.TestCase):
     def test_c_producer_units_validity_and_order(self):
         self.assertEqual(len(self.frames), 6)
         first, stale, position, dropped, disabled, negative = self.frames
-        self.assertEqual((first.version, first.payload_size), (12, 1552))
+        self.assertEqual((first.version, first.payload_size), (13, 1664))
         self.assertEqual(first.can_link_bitmap, 3)
+        self.assertEqual(first.can1_software_expired, 7)
+        self.assertEqual(first.can2_abort_requests, 3)
         self.assertEqual(first.chassis_motor_ids, [2, 1, 4, 3])
         self.assertEqual(first.motor_rpm, [20, 10, 40, 30])
         self.assertEqual(first.motor_target_rpm, [100, -200, 300, -400])
@@ -95,6 +97,23 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(old.yaw_transport_events, [])
         self.assertTrue(math.isnan(old.yaw_transport_channel))
 
+    def test_deadline_extension_and_event_routing(self):
+        # v12 prefix remains readable; new diagnostics must not be fabricated.
+        legacy = bytearray(self.raw[:1560])
+        legacy[2:4] = bytes([12, 1552 & 255])
+        legacy.extend(struct.pack('<H', crc16_firmware(legacy)))
+        old = FrameParser().feed(legacy, 0)[0]
+        self.assertTrue(math.isnan(old.can1_software_expired))
+        from dataclasses import replace
+        event = (100, 99, 10, 20, (2 << 24) | (0x1ff << 8) | 3)
+        frame = replace(self.frames[0], yaw_transport_events=[event])
+        writer = MonitorWriter(self.directory / 'deadline_events.txt')
+        writer.write_frames([frame]); writer.close()
+        with writer.trace_path.open() as handle:
+            row = next(csv.DictReader(handle, delimiter='\t'))
+        self.assertEqual((row['channel'], row['tx_id'], row['slot']), ('2', '511', '3'))
+        self.assertEqual(row['kind'], '10')
+
     def test_split_stream_crc_and_legacy(self):
         for chunk_size in (1, 17, 309, 512):
             parser = FrameParser()
@@ -104,9 +123,9 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual([f.seq for f in frames], [0, 1, 2, 4, 5, 6])
             self.assertEqual(parser.crc_error_count, 0)
         parser = FrameParser()
-        parser.feed(self.raw[:1562], 1)
-        corrupt = bytearray(self.raw[:1562]); corrupt[100] ^= 1
-        frames = parser.feed(corrupt + self.raw[:1562], 2)
+        parser.feed(self.raw[:1674], 1)
+        corrupt = bytearray(self.raw[:1674]); corrupt[100] ^= 1
+        frames = parser.feed(corrupt + self.raw[:1674], 2)
         self.assertEqual(len(frames), 1)
         self.assertEqual(parser.crc_error_count, 1)
         # Legacy v7 has an identical prefix, but no appended source metadata.
@@ -179,7 +198,7 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(math.isnan(row['yaw_rc_age_ms']))
         self.assertEqual(row['rc_rocker_r_x'], 111)
 
-        no_source = bytearray(self.raw[:1562])
+        no_source = bytearray(self.raw[:1674])
         struct.pack_into('<I', no_source, 8 + 300 + 4 * 4, 0)  # yaw_trace_flags
         no_source[-2:] = struct.pack('<H', crc16_firmware(no_source[:-2]))
         frame = FrameParser().feed(no_source, 4)[0]
@@ -211,7 +230,7 @@ function decode(bytes) {
  return latest;
 }
 const all = fs.readFileSync(process.argv[2]);
-const first = decode(all.subarray(0,1562));
+const first = decode(all.subarray(0,1674));
 assert.equal(first.capabilities,31);
 assert.deepEqual(first.chassis_motor_ids,[2,1,4,3]);
 assert.equal(first.gimbal_yaw_actual_deg,720);
@@ -222,6 +241,8 @@ assert.equal(first.gimbal_pitch_encoder_raw,2048);
 assert.equal(first.can_link_bitmap,3);
 assert.equal(first.rc_rocker_r_x,111);
 assert.equal(first.yaw_transport_count,2);
+assert.equal(first.can1_software_expired,7);
+assert.equal(first.can2_abort_requests,3);
 assert.equal(first.yaw_transport_events[0].raw,-12000);
 assert.equal(first.yaw_transport_events[1].detail,44);
 assert.equal(first.yaw_rc_ch0,-660);
@@ -232,7 +253,7 @@ assert.equal(first.yaw_current_actual_raw,-1234);
 assert.equal(first.yaw_pid_kp,120);
 assert.equal(first.imu_angle_deg[1],720);
 assert(Number.isNaN(first.gimbal_yaw_target_deg));
-assert(Number.isNaN(decode(all.subarray(1562,3124)).gimbal_yaw_actual_deg));
+assert(Number.isNaN(decode(all.subarray(1674,3348)).gimbal_yaw_actual_deg));
 const window = {devicePixelRatio:2};
 const document = {documentElement:{}};
 const getComputedStyle = () => ({getPropertyValue:()=> '#888'});
@@ -302,14 +323,14 @@ assert.equal(fields.remoteItems.find(i=>i.name==='rc_rocker_r_x').value,111);
 assert(fields.remoteItems.find(i=>i.name==='emergency_stop(flag2)').value.includes('N/A'));
 age=1500; assert.equal(renderFields().can,'STALE');
 age=0; latestForRender={...first,dashboard_version:7}; assert.equal(renderFields().can,'N/A');
-latestForRender=decode(all.subarray(1562,3124));
+latestForRender=decode(all.subarray(1674,3348));
 assert.equal(renderFields().can,'OFF');
 assert(renderFields().remoteItems.find(i=>i.name==='rc_rocker_r_x').value.includes('N/A'));
 """
         code += 'const HARD_MAX_POINTS = 12000;\n' + series_store + """
-const position=decode(all.subarray(3124,4686));
-const disabled=decode(all.subarray(6248,7810));
-const negative=decode(all.subarray(7810,9372));
+const position=decode(all.subarray(3348,5022));
+const disabled=decode(all.subarray(6696,8370));
+const negative=decode(all.subarray(8370,10044));
 assert(Number.isNaN(disabled.gimbal_cmd_yaw_deg));
 assert.equal(negative.gimbal_cmd_yaw_deg,-540);
 assert.equal(negative.gimbal_yaw_target_deg_s,-24);
@@ -351,7 +372,7 @@ assert.equal(yawSpeedReadout({...first,dashboard_version:7},true,1000,1001).targ
         frame_constants = 'const DASHBOARD_MAGIC' + self.html.split('      const DASHBOARD_MAGIC', 1)[1].split('      // Match firmware', 1)[0]
         buffer_helpers = 'function crc16Firmware(' + self.html.split('      function crc16Firmware(', 1)[1].split('      function clearDashboardSeries(', 1)[0]
         packets = [base64.b64encode(RTTWebSocketBridge._make_packet(STREAM_DASHBOARD, part)).decode()
-                   for part in (self.raw[6248:7810], self.raw[:17], self.raw[17:1562], self.raw[7810:9372])]
+                   for part in (self.raw[6696:8370], self.raw[:17], self.raw[17:1674], self.raw[8370:10044])]
         code += packet_constants + frame_constants + buffer_helpers + """
 let liveSocket;
 class WebSocket {

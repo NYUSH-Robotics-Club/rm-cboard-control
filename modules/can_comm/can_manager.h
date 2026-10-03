@@ -16,6 +16,9 @@
 typedef struct {
     uint16_t std_id;           // 0x200, 0x1FF, 0x2FF, 0x1FE, or 0x2FE
     int16_t currents[4];       // Currents for 4 motor slots
+    uint32_t generated_ms[4];
+    uint16_t ttl_ms[4], abort_ms[4];
+    uint8_t valid_mask;         /* Slot ages survive mailbox acceptance; new output renews only its own slot. */
     uint8_t pending;           // latest per-slot values retained until mailbox acceptance
 } CANTxFrame_t;
 

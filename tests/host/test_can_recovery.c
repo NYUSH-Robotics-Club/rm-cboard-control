@@ -164,9 +164,46 @@ static void test_single_flight(void) {
  puts("CAN single flight: PASS (ID/bus isolation, full mailboxes, completion, stop abort, fault cancellation)");
 }
 
+static void test_deadlines(void) {
+ assert(BspCan_Start(BSP_CAN_CHANNEL_1)&&BspCan_Start(BSP_CAN_CHANNEL_2));
+ BspCan_Service(0);assert(BspCan_TryArm(500));
+ pending_model=true;memset(pending_masks,0,sizeof(pending_masks));
+ uint8_t data[8]={1},zero[8]={0};chosen_mailbox=0;abort_completes=0;
+ now_ms=1000;
+ assert(BspCan_TryWriteDeadline(BSP_CAN_CHANNEL_1,0x2fe,data,8,1000,1020,20)==BSP_CAN_TX_ACCEPTED);
+ now_ms=1019;BspCan_Service(now_ms);assert(!BspCan_GetDeadlineDiagnostics(1)->abort_requests);
+ now_ms=1020;BspCan_Service(now_ms);
+ assert(BspCan_GetDeadlineDiagnostics(1)->inflight_expired==1);
+ assert(BspCan_GetDeadlineDiagnostics(1)->abort_requests==1);
+ now_ms=1021;
+ assert(BspCan_TryWriteDeadline(1,0x2fe,data,8,1021,1041,20)==BSP_CAN_TX_BUSY);
+ assert(BspCan_GetDeadlineDiagnostics(1)->abort_requests==1);
+ finish_mailbox(&hcan1,0);regs[0].TSR &= ~2U; /* Successful abort, not TXOK. */
+ BspCan_Service(now_ms);assert(BspCan_GetDeadlineDiagnostics(1)->abort_completed==1);
+ assert(BspCan_TryWriteDeadline(1,0x2fe,data,8,1000,1020,20)==BSP_CAN_TX_ERROR);
+ /* Zero remains pending without timeout cancellation, even with no new command. */
+ assert(BspCan_TryWriteDeadline(1,0x2fe,zero,8,1021,1041,20)==BSP_CAN_TX_ACCEPTED);
+ now_ms=1100;BspCan_Service(now_ms);assert(BspCan_GetDeadlineDiagnostics(1)->abort_requests==1);
+ finish_mailbox(&hcan1,0);BspCan_Service(now_ms);
+ /* Independent second bus and rollover; completion races cancellation. */
+ now_ms=UINT32_MAX-9;
+ assert(BspCan_TryWriteDeadline(2,0x1ff,data,8,now_ms,10,20)==BSP_CAN_TX_ACCEPTED);
+ now_ms=9;BspCan_Service(now_ms);assert(!BspCan_GetDeadlineDiagnostics(2)->abort_requests);
+ now_ms=10;BspCan_Service(now_ms);assert(BspCan_GetDeadlineDiagnostics(2)->abort_requests==1);
+ finish_mailbox(&hcan2,0);now_ms=11;BspCan_Service(now_ms);
+ assert(BspCan_GetDeadlineDiagnostics(2)->abort_raced_txok==1);
+ now_ms=100;assert(BspCan_TryWriteDeadline(2,0x1ff,data,8,100,120,20)==BSP_CAN_TX_ACCEPTED);
+ now_ms=120;BspCan_Service(now_ms);now_ms=140;BspCan_Service(now_ms);
+ assert(!BspCan_OutputsArmed() && BspCan_GetDeadlineDiagnostics(2)->abort_failed==1);
+ pending_model=false;abort_completes=1;memset(regs,0,sizeof(regs));
+ now_ms=aborts=writes=chosen_mailbox=0;
+ puts("CAN expiry: PASS (deadline, abort once, asynchronous release, zero, race, wrap, stuck abort)");
+}
+
 int main(void) {
  test_trace();
  test_single_flight();
+ test_deadlines();
  assert(BspCan_Start(BSP_CAN_CHANNEL_1)&&BspCan_Start(BSP_CAN_CHANNEL_2));
  uint8_t zero[8]={0}, command[8]={0,100};
  BspCan_Service(0);

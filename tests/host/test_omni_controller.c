@@ -254,3 +254,11 @@ void BspCan_TraceFeedback(BspCanChannel c, uint16_t id, uint32_t ms, int32_t raw
 
 BspCanTxResult BspCan_TryWrite(BspCanChannel c, uint16_t id, const uint8_t *d, uint8_t n)
 { return BspCan_Write(c,id,d,n) ? BSP_CAN_TX_ACCEPTED : BSP_CAN_TX_ERROR; }
+
+BspCanTxResult BspCan_TryWriteDeadline(BspCanChannel c,uint16_t id,const uint8_t *d,uint8_t n,
+ uint32_t generated,uint32_t deadline,uint32_t abort_ms) {
+ (void)generated;(void)deadline;(void)abort_ms;return BspCan_TryWrite(c,id,d,n);
+}
+void BspCan_ReportExpiredSlot(BspCanChannel c,uint16_t id,uint8_t slot,uint32_t generated) {
+ (void)c;(void)id;(void)slot;(void)generated;
+}

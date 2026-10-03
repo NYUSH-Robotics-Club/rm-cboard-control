@@ -413,6 +413,7 @@
         10: 444,
         11: 552,
         12: 1552,
+        13: 1664,
       };
 
       // Match firmware modules/algorithm/crc16.c (table starts with 0x0000, 0x1189, ...)
@@ -1667,6 +1668,12 @@
                 }
               }
 
+              if (version >= 13) {
+                for (const bus of [1, 2])
+                  for (const name of ["software_expired", "inflight_expired", "abort_requests", "abort_completed", "abort_failed", "abort_raced_txok", "max_submit_age_ms", "max_inflight_age_ms", "max_abort_age_ms", "last_id", "last_slot", "last_generated_ms", "event_sequence", "last_event"])
+                    latest[`can${bus}_${name}`] = readU32();
+              }
+
               if ((store.lastSeq !== null && seq < store.lastSeq) ||
                   (store.lastTimestampMs !== null &&
                    latest.timestamp_ms < store.lastTimestampMs)) {
@@ -1942,6 +1949,8 @@
               { name: "pitch_inner_gains", value: `${fmtMaybe(latest.pitch_inner_kp)} / ${fmtMaybe(latest.pitch_inner_ki)} / ${fmtMaybe(latest.pitch_inner_kd)}` },
               { name: "pitch_inner_limits", value: `${fmtMaybe(latest.pitch_inner_output_max)} / ${fmtMaybe(latest.pitch_inner_integral_max)}` },
               { name: "pitch_pid_dt_s", value: fmtMaybe(latest.pitch_pid_dt_s, 6) },
+              ...[1, 2].flatMap(bus => ["software_expired", "inflight_expired", "abort_requests", "abort_completed", "abort_failed", "abort_raced_txok", "max_submit_age_ms", "max_inflight_age_ms", "max_abort_age_ms", "last_id", "last_slot", "last_generated_ms", "event_sequence", "last_event"].map(name =>
+                ({name: `can${bus}_${name}`, value: latest[`can${bus}_${name}`] ?? "—"}))),
               ...["channel", "tx_id", "rx_id", "slot", "count", "lost", "esr", "tsr", "hal_error", "free_mailboxes"].map(name =>
                 ({name: "yaw_transport_" + name, value: latest["yaw_transport_" + name] ?? "—"})),
             ]

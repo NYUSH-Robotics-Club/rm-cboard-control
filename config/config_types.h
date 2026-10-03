@@ -180,6 +180,8 @@ typedef struct {
     CAN_Channel_t can_channel;     // CAN bus channel (CAN_CHANNEL_1 or CAN_CHANNEL_2)
     uint16_t can_rx_id;            // CAN ID for receiving feedback
     uint16_t can_tx_id;            // CAN command group selected by the motor protocol
+    uint16_t tx_command_ttl_ms;    /* 0采用20ms默认值；从输出生成开始，重试不续期。 */
+    uint16_t tx_abort_timeout_ms;  /* 0采用20ms默认值；取消未完成则锁定输出。 */
     uint8_t tx_slot;               // Slot position in TX frame (0-3)
 
     // Motor-specific parameters

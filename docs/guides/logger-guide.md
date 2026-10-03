@@ -115,3 +115,21 @@ python script/logger.py /dev/serial/by-id/实际C板设备 --tags GIM --save gim
 没有输出时依次检查：固件是否运行、是否接入 C 板 USB CDC、标签开关和实际调用路径。
 大量文本日志会占用 USB CDC 带宽；调试结束后关闭不需要的标签。旧绘图脚本位于
 `script/deprecated/`，没有随当前消息契约维护。
+
+## v13 CAN有效期诊断
+
+v13 payload为1664字节，保留v12前缀，追加CAN1/CAN2各14个uint32字段。
+网页原始字段与主日志保存`can1_`、`can2_`前缀的以下字段：
+`software_expired`、`inflight_expired`、`abort_requests`、`abort_completed`、
+`abort_failed`、`abort_raced_txok`、`max_submit_age_ms`、`max_inflight_age_ms`、
+`max_abort_age_ms`、`last_id`、`last_slot`、`last_generated_ms`、`event_sequence`、`last_event`。
+旧版本不产生这些值。年龄最大值是任务观察值，不是硬件精确总线耗时；全零停机帧可长期等待。
+
+原`.yaw_transport.tsv`同时承载两路过期诊断：kind10软件槽位过期、11在途过期、
+12取消请求、13取消后释放且未观察到TXOK、14取消与TXOK竞争、15取消失败/超时。
+这些事件的raw为年龄或等待时间(ms)，detail编码为`channel<<24 | tx_id<<8 | index`；
+kind10的index是电机槽位，其他是邮箱号。Python保存时按事件解码通道和ID，
+未知的反馈ID/电机槽位置为-1，不能用批次yaw元数据代替。kind1～9解释不变。
+事件可能被覆盖，需配合累计计数、事件序号和telemetry_drop_count判断采样缺口。
+
+更新后重启logger并刷新网页以加载v13解析器；新解析器继续兼容v3～v12。

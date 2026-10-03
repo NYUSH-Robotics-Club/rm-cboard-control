@@ -2,6 +2,7 @@
  * RTT writes are captured as binary frames; no hardware or control output is used.
  */
 #include "dashboard.h"
+#include "bsp_can.h"
 #include "gimbal_monitor.h"
 #include "chassis_controller.h"
 #include "message_center.h"
@@ -98,7 +99,7 @@ int main(void) {
         .pitch = {.flags = 31, .position_actual_ticks = 2048, .position_target_ticks = 1024,
             .speed_actual_rpm = -2, .speed_target_rpm = -3, .encoder_raw = 2048}};
     Dashboard_Step();
-    assert(captured.version == 12 && captured.payload_len == (1552 & 255));
+    assert(captured.version == 13 && captured.payload_len == (1664 & 255));
     assert(captured.payload.yaw_diag_valid == 1 && captured.payload.yaw_rc_ch0 == -660);
     assert(captured.payload.yaw_rc_sequence == 17 && captured.payload.yaw_route_sequence == 122);
     assert(captured.payload.yaw_command_raw == 321 && captured.payload.yaw_current_actual_raw == -1234);
@@ -162,4 +163,9 @@ void MotorService_ReadTrace(MotorTraceBatch *b)
 {
     *b = (MotorTraceBatch){.channel=1, .tx_id=0x2fe, .rx_id=0x209, .slot=0, .count=2, .lost=7,
         .events={{123, 44, MOTOR_TRACE_SUBMIT | 256, -12000, 43}, {127, 45, MOTOR_TRACE_TX_ARB_LOST | 256, 5, 44}}};
+}
+
+const BspCanDeadlineDiagnostics *BspCan_GetDeadlineDiagnostics(BspCanChannel c) {
+ static const BspCanDeadlineDiagnostics d={.software_expired=7,.abort_requests=3};
+ (void)c;return &d;
 }

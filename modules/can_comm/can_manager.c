@@ -267,6 +267,10 @@ HAL_StatusTypeDef CAN_Manager_SendMotorCurrent(CAN_Manager_t *manager,
         if (to_bsp_channel(manager->channel, &channel))
             BspCan_TraceCommand(channel, motor->can_tx_id, motor->tx_slot, current);
         tx_frame->currents[motor->tx_slot] = current;
+        tx_frame->generated_ms[motor->tx_slot] = BspTime_NowMs();
+        tx_frame->ttl_ms[motor->tx_slot] = motor->tx_command_ttl_ms ? motor->tx_command_ttl_ms : 20U;
+        tx_frame->abort_ms[motor->tx_slot] = motor->tx_abort_timeout_ms ? motor->tx_abort_timeout_ms : 20U;
+        tx_frame->valid_mask |= (uint8_t)(1U << motor->tx_slot);
         tx_frame->pending = 1;  // Mark frame as pending
     } else {
         return HAL_ERROR;  // Invalid slot
@@ -289,6 +293,8 @@ HAL_StatusTypeDef CAN_Manager_FlushTx(CAN_Manager_t *manager)
     /* Recovery must not retain a pre-fault nonzero command in the software queue. */
     if (!BspCan_OutputsArmed()) {
         for (uint8_t i = 0U; i < CAN_TX_FRAME_COUNT; ++i) {
+            if(manager->tx_frames[i].valid_mask)manager->tx_frames[i].pending=1;
+            manager->tx_frames[i].valid_mask=0;
             memset(manager->tx_frames[i].currents, 0, sizeof(manager->tx_frames[i].currents));
         }
     }
@@ -297,6 +303,25 @@ HAL_StatusTypeDef CAN_Manager_FlushTx(CAN_Manager_t *manager)
     for (uint8_t i = 0; i < CAN_TX_FRAME_COUNT; i++) {
         CANTxFrame_t *tx_frame = &manager->tx_frames[i];
 
+        uint32_t now=BspTime_NowMs(), deadline=now+20U, generated=now, abort_ms=20U;
+        bool have_deadline=false;
+        BspCanChannel frame_channel;
+        if(!to_bsp_channel(manager->channel,&frame_channel))return HAL_ERROR;
+        for(unsigned slot=0;slot<4;slot++) {
+            if(!(tx_frame->valid_mask & (1U<<slot)))continue;
+            uint32_t age=now-tx_frame->generated_ms[slot];
+            if(age>=tx_frame->ttl_ms[slot]) {
+                BspCan_ReportExpiredSlot(frame_channel,tx_frame->std_id,slot,tx_frame->generated_ms[slot]);
+                tx_frame->valid_mask &= (uint8_t)~(1U<<slot);
+                tx_frame->currents[slot]=0;tx_frame->pending=1;
+            } else if(tx_frame->currents[slot]!=0) {
+                uint32_t end=tx_frame->generated_ms[slot]+tx_frame->ttl_ms[slot];
+                if(!have_deadline || (int32_t)(end-deadline)<0)deadline=end;
+                if(!have_deadline || age>now-generated)generated=tx_frame->generated_ms[slot];
+                if(!have_deadline || tx_frame->abort_ms[slot]<abort_ms)abort_ms=tx_frame->abort_ms[slot];
+                have_deadline=true;
+            }
+        }
         if (tx_frame->pending) {
             uint8_t data[8] = {0};
 
@@ -308,12 +333,11 @@ HAL_StatusTypeDef CAN_Manager_FlushTx(CAN_Manager_t *manager)
 
             BspCanChannel channel;
             BspCanTxResult status = to_bsp_channel(manager->channel, &channel)
-                ? BspCan_TryWrite(channel, tx_frame->std_id, data, sizeof(data))
+                ? BspCan_TryWriteDeadline(channel, tx_frame->std_id, data, sizeof(data), generated, deadline, abort_ms)
                 : BSP_CAN_TX_ERROR;
             if (status == BSP_CAN_TX_ACCEPTED) {
                 manager->tx_ok++; /* Mailbox accepted, not necessarily transmitted. */
                 manager->last_tx_time = BspTime_NowMs();
-                memset(tx_frame->currents, 0, sizeof(tx_frame->currents));
                 tx_frame->pending = 0;
             } else if (status == BSP_CAN_TX_BUSY) {
                 manager->tx_busy++;
@@ -330,8 +354,11 @@ HAL_StatusTypeDef CAN_Manager_FlushTx(CAN_Manager_t *manager)
     /* A write can discover bus-off and disarm both buses midway through this
      * flush. Purge retained nonzero values immediately, not only on entry. */
     if (!BspCan_OutputsArmed()) {
-        for (uint8_t i = 0U; i < CAN_TX_FRAME_COUNT; ++i)
+        for (uint8_t i = 0U; i < CAN_TX_FRAME_COUNT; ++i) {
+            if(manager->tx_frames[i].valid_mask)manager->tx_frames[i].pending=1;
+            manager->tx_frames[i].valid_mask=0;
             memset(manager->tx_frames[i].currents, 0, sizeof(manager->tx_frames[i].currents));
+        }
     }
 
     return result;

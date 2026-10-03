@@ -61,6 +61,8 @@ static const MotorConfig_t g_motor_configs_sentry_swerve[] = {
         .can_channel = CAN_CHANNEL_1,
         .can_rx_id = 0x201,
         .can_tx_id = 0x200,
+        .tx_command_ttl_ms = 20U,
+        .tx_abort_timeout_ms = 20U,
         .tx_slot = 0,
         .direction = 1,
         .limits.m3508 = {.speed_limit = 10000.0f},
@@ -68,13 +70,13 @@ static const MotorConfig_t g_motor_configs_sentry_swerve[] = {
         .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // Wheel 1 drive (front normal wheel)
-    {.motor_id = 1, .offline_alarm_id = 2, .vendor = MOTOR_VENDOR_DJI, .type = MOTOR_TYPE_M3508, .role = MOTOR_ROLE_CHASSIS_DRIVE, .control_mode = MOTOR_CONTROL_APPLICATION, .can_channel = CAN_CHANNEL_1, .can_rx_id = 0x202, .can_tx_id = 0x200, .tx_slot = 1, .direction = -1, .limits.m3508 = {.speed_limit = 10000.0f}, .pid_outer = {8.0f, 0.0f, 0.1f, 15000.0f, 7500.0f}, .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
+    {.motor_id = 1, .offline_alarm_id = 2, .vendor = MOTOR_VENDOR_DJI, .type = MOTOR_TYPE_M3508, .role = MOTOR_ROLE_CHASSIS_DRIVE, .control_mode = MOTOR_CONTROL_APPLICATION, .can_channel = CAN_CHANNEL_1, .can_rx_id = 0x202, .can_tx_id = 0x200, .tx_command_ttl_ms = 20U, .tx_abort_timeout_ms = 20U, .tx_slot = 1, .direction = -1, .limits.m3508 = {.speed_limit = 10000.0f}, .pid_outer = {8.0f, 0.0f, 0.1f, 15000.0f, 7500.0f}, .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // Wheel 2 drive (left-omniwheel)
-    {.motor_id = 2, .offline_alarm_id = 3, .vendor = MOTOR_VENDOR_DJI, .type = MOTOR_TYPE_M3508, .role = MOTOR_ROLE_CHASSIS_DRIVE, .control_mode = MOTOR_CONTROL_APPLICATION, .can_channel = CAN_CHANNEL_1, .can_rx_id = 0x203, .can_tx_id = 0x200, .tx_slot = 2, .direction = 1, .limits.m3508 = {.speed_limit = 10000.0f}, .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f}, .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
+    {.motor_id = 2, .offline_alarm_id = 3, .vendor = MOTOR_VENDOR_DJI, .type = MOTOR_TYPE_M3508, .role = MOTOR_ROLE_CHASSIS_DRIVE, .control_mode = MOTOR_CONTROL_APPLICATION, .can_channel = CAN_CHANNEL_1, .can_rx_id = 0x203, .can_tx_id = 0x200, .tx_command_ttl_ms = 20U, .tx_abort_timeout_ms = 20U, .tx_slot = 2, .direction = 1, .limits.m3508 = {.speed_limit = 10000.0f}, .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f}, .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // Wheel 3 drive (back normal wheel)
-    {.motor_id = 3, .offline_alarm_id = 4, .vendor = MOTOR_VENDOR_DJI, .type = MOTOR_TYPE_M3508, .role = MOTOR_ROLE_CHASSIS_DRIVE, .control_mode = MOTOR_CONTROL_APPLICATION, .can_channel = CAN_CHANNEL_1, .can_rx_id = 0x204, .can_tx_id = 0x200, .tx_slot = 3, .direction = -1, .limits.m3508 = {.speed_limit = 10000.0f}, .pid_outer = {8.0f, 0.0f, 0.005f, 15000.0f, 7500.0f}, .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
+    {.motor_id = 3, .offline_alarm_id = 4, .vendor = MOTOR_VENDOR_DJI, .type = MOTOR_TYPE_M3508, .role = MOTOR_ROLE_CHASSIS_DRIVE, .control_mode = MOTOR_CONTROL_APPLICATION, .can_channel = CAN_CHANNEL_1, .can_rx_id = 0x204, .can_tx_id = 0x200, .tx_command_ttl_ms = 20U, .tx_abort_timeout_ms = 20U, .tx_slot = 3, .direction = -1, .limits.m3508 = {.speed_limit = 10000.0f}, .pid_outer = {8.0f, 0.0f, 0.005f, 15000.0f, 7500.0f}, .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // --------------------------
     // STEERING (GM6020) — CAN1
@@ -84,6 +86,8 @@ static const MotorConfig_t g_motor_configs_sentry_swerve[] = {
         .motor_id = 5, .offline_alarm_id = 5, .vendor = MOTOR_VENDOR_DJI, .type = MOTOR_TYPE_GM6020, .role = MOTOR_ROLE_CHASSIS_STEER, .control_mode = MOTOR_CONTROL_APPLICATION, .can_channel = CAN_CHANNEL_1,
         .can_rx_id = 0x209, // 0x204 + 5
         .can_tx_id = 0x2FF, // GM6020 ID 5-7 use 0x2FF
+        .tx_command_ttl_ms = 20U,
+        .tx_abort_timeout_ms = 20U,
         .tx_slot = 0,       // For 0x2FF, slot = (motor_id - 5)
         .direction = 1,
         .limits.gm6020 = {.angle_min = 0.0f, .angle_max = 8192.0f, .gravity_compensation = 0.0f, .initial_angle = 1084.0f},
@@ -96,6 +100,8 @@ static const MotorConfig_t g_motor_configs_sentry_swerve[] = {
         .motor_id = 6, .offline_alarm_id = 6, .vendor = MOTOR_VENDOR_DJI, .type = MOTOR_TYPE_GM6020, .role = MOTOR_ROLE_CHASSIS_STEER, .control_mode = MOTOR_CONTROL_APPLICATION, .can_channel = CAN_CHANNEL_1,
         .can_rx_id = 0x20A, // 0x204 + 6
         .can_tx_id = 0x2FF,
+        .tx_command_ttl_ms = 20U,
+        .tx_abort_timeout_ms = 20U,
         .tx_slot = 1,
         .direction = 1,
         .limits.gm6020 = {.angle_min = 0.0f, .angle_max = 8192.0f, .gravity_compensation = 0.0f, .initial_angle = 2434.0f},
@@ -118,6 +124,8 @@ static const MotorConfig_t g_motor_configs_sentry_swerve[] = {
         .can_channel = CAN_CHANNEL_1,
         .can_rx_id = 0x20B, // 0x204 + 7
         .can_tx_id = 0x2FF, // GM6020 ID 5-7 use 0x2FF
+        .tx_command_ttl_ms = 20U,
+        .tx_abort_timeout_ms = 20U,
         .tx_slot = 2,       // motor_id - 5 = 7 - 5 = 2
         .direction = 1,
         .limits.gm6020 = {

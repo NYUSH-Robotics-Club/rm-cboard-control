@@ -94,6 +94,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .can_channel = CAN_CHANNEL_1,
         .can_rx_id = 0x201,
         .can_tx_id = 0x200,
+        .tx_command_ttl_ms = 20U,
+        .tx_abort_timeout_ms = 20U,
         .tx_slot = 0,
         .direction = -1, // 旧安装方向值；全向轮启用前须核对正转方向。
         .limits.m3508 = {.speed_limit = 10000.0f},
@@ -110,6 +112,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .can_channel = CAN_CHANNEL_1,
      .can_rx_id = 0x202,
      .can_tx_id = 0x200,
+     .tx_command_ttl_ms = 20U,
+     .tx_abort_timeout_ms = 20U,
      .tx_slot = 1,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
@@ -125,6 +129,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .can_channel = CAN_CHANNEL_1,
      .can_rx_id = 0x203,
      .can_tx_id = 0x200,
+     .tx_command_ttl_ms = 20U,
+     .tx_abort_timeout_ms = 20U,
      .tx_slot = 2,
      .direction = 1,
      .limits.m3508 = {.speed_limit = 10000.0f},
@@ -140,6 +146,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .can_channel = CAN_CHANNEL_1,
      .can_rx_id = 0x204,
      .can_tx_id = 0x200,
+     .tx_command_ttl_ms = 20U,
+     .tx_abort_timeout_ms = 20U,
      .tx_slot = 3,
      .direction = -1,
      .limits.m3508 = {.speed_limit = 10000.0f},
@@ -156,6 +164,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .can_channel = CAN_CHANNEL_2,
      .can_rx_id = 0x203,
      .can_tx_id = 0x200,
+     .tx_command_ttl_ms = 20U,
+     .tx_abort_timeout_ms = 20U,
      .tx_slot = 2,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
@@ -173,6 +183,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .can_channel = CAN_CHANNEL_2,
      .can_rx_id = 0x201,
      .can_tx_id = 0x200,
+     .tx_command_ttl_ms = 20U,
+     .tx_abort_timeout_ms = 20U,
      .tx_slot = 0,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
@@ -188,6 +200,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .can_channel = CAN_CHANNEL_2,
      .can_rx_id = 0x202,
      .can_tx_id = 0x200,
+     .tx_command_ttl_ms = 20U,
+     .tx_abort_timeout_ms = 20U,
      .tx_slot = 1,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
@@ -207,6 +221,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .can_channel = CAN_CHANNEL_1,
         .can_rx_id = 0x209, // GM6020 反馈地址 = 0x204 + 硬件 ID 5。
         .can_tx_id = 0x2FE, // GM6020 ID5 电流指令，匹配已开启的电调电流环。
+        .tx_command_ttl_ms = 20U,
+        .tx_abort_timeout_ms = 20U,
         .tx_slot = 0,
         .direction = +1,
         .limits.gm6020 =
@@ -235,6 +251,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .can_channel = CAN_CHANNEL_2,
         .can_rx_id = 0x208, // GM6020 反馈地址 = 0x204 + 硬件 ID 4。
         .can_tx_id = 0x1FF, // GM6020 硬件 ID 1~4 的控制报文。
+        .tx_command_ttl_ms = 20U,
+        .tx_abort_timeout_ms = 20U,
         .tx_slot = 3,
         .direction = -1, // Pitch direction correction
         .limits.gm6020 =

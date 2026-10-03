@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "motor_trace.h"
+#include "can_deadline.h"
 
 typedef enum {
     BSP_CAN_CHANNEL_1 = 1,
@@ -37,6 +38,9 @@ void BspCan_TraceCommand(BspCanChannel channel, uint16_t tx_id, uint8_t slot, in
 void BspCan_TraceFeedback(BspCanChannel channel, uint16_t rx_id, uint32_t ms, int32_t raw, uint32_t detail);
 void BspCan_TraceRead(MotorTraceBatch *batch);
 
+const BspCanDeadlineDiagnostics *BspCan_GetDeadlineDiagnostics(BspCanChannel channel);
+void BspCan_ReportExpiredSlot(BspCanChannel channel, uint16_t id, uint8_t slot, uint32_t generated_ms);
+/* Deadline is absolute MCU ms; durations must be <2^31 ms. Zero payload stays valid as a stop. */
 /* 使用当前板卡的固定过滤器配置启动通道。 */
 bool BspCan_Start(BspCanChannel channel);
 
@@ -44,6 +48,10 @@ bool BspCan_Start(BspCanChannel channel);
 bool BspCan_Read(BspCanChannel channel, BspCanFrame *frame);
 
 typedef enum { BSP_CAN_TX_ACCEPTED, BSP_CAN_TX_BUSY, BSP_CAN_TX_ERROR } BspCanTxResult;
+BspCanTxResult BspCan_TryWriteDeadline(BspCanChannel channel, uint16_t id,
+    const uint8_t *data, uint8_t length, uint32_t generated_ms,
+    uint32_t deadline_ms, uint32_t abort_timeout_ms);
+
 /* Task-context only. At most one in-flight frame per (channel, standard_id).
  * BUSY does not consume the caller's latest pending value. No blocking/retry loop.
  * A full zero frame cancels an older nonzero frame of that ID before submission. */

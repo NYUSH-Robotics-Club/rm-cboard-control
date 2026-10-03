@@ -6,11 +6,12 @@
 
 #include <stdint.h>
 #include "motor_trace.h"
+#include "can_deadline.h"
 
 #define DASHBOARD_RTT_CHANNEL 1U
 #define DASHBOARD_RTT_BUFFER_SIZE 8192U
 #define DASHBOARD_FRAME_MAGIC 0x4452U
-#define DASHBOARD_FRAME_VERSION 12U
+#define DASHBOARD_FRAME_VERSION 13U
 
 enum {
   DASHBOARD_CAN = 1U,      /* CAN位表示该总线有配置电机在100ms内反馈，不代表总线无错误。 */
@@ -79,6 +80,7 @@ typedef struct {
   float pitch_inner_kp, pitch_inner_ki, pitch_inner_kd, pitch_inner_output_max, pitch_inner_integral_max;
   float pitch_pid_dt_s;
   MotorTraceBatch yaw_transport; /* v12: independent timestamped events, not one callback. */
+  BspCanDeadlineDiagnostics can_deadline[2]; /* v13: both buses, fixed uint32 layout. */
 } DashboardPayload;
 typedef struct { uint16_t magic; uint8_t version, payload_len; uint32_t seq; DashboardPayload payload; uint16_t crc16; } DashboardFrame;
 #pragma pack(pop)

@@ -8,8 +8,8 @@ from typing import Dict, List
 
 MAGIC = 0x4452
 MAGIC_ALT = 0x5244
-CURRENT_VERSION = 12
-SUPPORTED_VERSIONS = (3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+CURRENT_VERSION = 13
+SUPPORTED_VERSIONS = (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
 
 HEADER_STRUCT = struct.Struct("<HBBI")
 PAYLOAD_STRUCT_V3 = struct.Struct("<Iff4f4f3f3f11f10B8h2BH8BII7fBHBB15fH")
@@ -35,6 +35,10 @@ TRACE_METADATA_FIELDS = ("yaw_transport_channel", "yaw_transport_tx_id", "yaw_tr
 TRACE_METADATA = struct.Struct("<10I")
 TRACE_EVENT = struct.Struct("<IIIiI")
 PAYLOAD_STRUCT_V12 = struct.Struct(PAYLOAD_STRUCT_V11.format + "10I" + "IIIiI" * TRACE_BATCH_SIZE)
+CAN_DEADLINE_NAMES = ('software_expired', 'inflight_expired', 'abort_requests', 'abort_completed', 'abort_failed', 'abort_raced_txok', 'max_submit_age_ms', 'max_inflight_age_ms', 'max_abort_age_ms', 'last_id', 'last_slot', 'last_generated_ms', 'event_sequence', 'last_event')
+CAN_DEADLINE_FIELDS = tuple(f"can{bus}_{name}" for bus in (1, 2) for name in CAN_DEADLINE_NAMES)
+CAN_DEADLINE_STRUCT = struct.Struct("<28I")
+PAYLOAD_STRUCT_V13 = struct.Struct(PAYLOAD_STRUCT_V12.format + "28I")
 PITCH_DIAGNOSTIC_FIELDS = (
     "pitch_diag_valid", "pitch_feedback_ms", "pitch_command_unit", "pitch_command_status",
     "pitch_command_raw", "pitch_current_actual_raw", "pitch_speed_target_rpm", "pitch_speed_actual_rpm",
@@ -86,6 +90,7 @@ PAYLOAD_STRUCTS: Dict[int, struct.Struct] = {
     10: PAYLOAD_STRUCT_V10,
     11: PAYLOAD_STRUCT_V11,
     12: PAYLOAD_STRUCT_V12,
+    13: PAYLOAD_STRUCT_V13,
 }
 PAYLOAD_SIZES = {version: payload_struct.size for version, payload_struct in PAYLOAD_STRUCTS.items()}
 PAYLOAD_SIZE = PAYLOAD_SIZES[CURRENT_VERSION]
@@ -297,6 +302,34 @@ class TelemetryFrame:
     yaw_transport_tsr: int | float = float("nan")
     yaw_transport_hal_error: int | float = float("nan")
     yaw_transport_free_mailboxes: int | float = float("nan")
+    can1_software_expired: int | float = float("nan")
+    can1_inflight_expired: int | float = float("nan")
+    can1_abort_requests: int | float = float("nan")
+    can1_abort_completed: int | float = float("nan")
+    can1_abort_failed: int | float = float("nan")
+    can1_abort_raced_txok: int | float = float("nan")
+    can1_max_submit_age_ms: int | float = float("nan")
+    can1_max_inflight_age_ms: int | float = float("nan")
+    can1_max_abort_age_ms: int | float = float("nan")
+    can1_last_id: int | float = float("nan")
+    can1_last_slot: int | float = float("nan")
+    can1_last_generated_ms: int | float = float("nan")
+    can1_event_sequence: int | float = float("nan")
+    can1_last_event: int | float = float("nan")
+    can2_software_expired: int | float = float("nan")
+    can2_inflight_expired: int | float = float("nan")
+    can2_abort_requests: int | float = float("nan")
+    can2_abort_completed: int | float = float("nan")
+    can2_abort_failed: int | float = float("nan")
+    can2_abort_raced_txok: int | float = float("nan")
+    can2_max_submit_age_ms: int | float = float("nan")
+    can2_max_inflight_age_ms: int | float = float("nan")
+    can2_max_abort_age_ms: int | float = float("nan")
+    can2_last_id: int | float = float("nan")
+    can2_last_slot: int | float = float("nan")
+    can2_last_generated_ms: int | float = float("nan")
+    can2_event_sequence: int | float = float("nan")
+    can2_last_event: int | float = float("nan")
     yaw_transport_events: list = dataclasses.field(default_factory=list)
 
 
@@ -1463,6 +1496,10 @@ class FrameParser:
                     offset += TRACE_METADATA.size
                     frame.yaw_transport_events = [TRACE_EVENT.unpack_from(raw, offset + i * TRACE_EVENT.size)
                         for i in range(min(frame.yaw_transport_count, TRACE_BATCH_SIZE))]
+                if version >= 13:
+                    values = CAN_DEADLINE_STRUCT.unpack_from(raw, HEADER_STRUCT.size + PAYLOAD_STRUCT_V12.size)
+                    for name, value in zip(CAN_DEADLINE_FIELDS, values):
+                        setattr(frame, name, value)
                 frames.append(frame)
             elif version == 7:
                 frames.append(self._parse_v7(raw, version, seq, host_rx_ms))

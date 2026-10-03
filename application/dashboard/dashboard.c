@@ -3,6 +3,7 @@
  * 不访问HAL、不猜测未接入数据；无效值用NaN，RTT满时丢帧而不阻塞控制。
  */
 #include "dashboard.h"
+#include "bsp_can.h"
 #include "gimbal_monitor.h"
 #include "chassis_controller.h"
 #include "message_center.h"
@@ -19,8 +20,9 @@
 #include <stdatomic.h>
 #include <string.h>
 
-_Static_assert(sizeof(DashboardPayload) == 1552U, "dashboard v12 payload ABI");
-_Static_assert(sizeof(DashboardFrame) == 1562U, "dashboard v12 frame ABI");
+_Static_assert(sizeof(BspCanDeadlineDiagnostics) == 56U, "CAN deadline telemetry ABI");
+_Static_assert(sizeof(DashboardPayload) == 1664U, "dashboard v13 payload ABI");
+_Static_assert(sizeof(DashboardFrame) == 1674U, "dashboard v13 frame ABI");
 _Static_assert(offsetof(DashboardPayload, yaw_diag_valid) == 300U, "preserve v8 prefix");
 
 static uint8_t s_initialized;
@@ -375,6 +377,10 @@ void Dashboard_Step(void) {
     }
   }
   MotorService_ReadTrace(&p->yaw_transport);
+  for(unsigned b=0;b<2;b++) {
+    const BspCanDeadlineDiagnostics *diag=BspCan_GetDeadlineDiagnostics((BspCanChannel)(b+1));
+    if(diag)p->can_deadline[b]=*diag;
+  }
   p->telemetry_drop_count = s_drop_count;
   frame.crc16 = dashboard_crc16((const uint8_t *)&frame, (uint16_t)(sizeof(frame) - sizeof(frame.crc16)));
   if (SEGGER_RTT_Write(DASHBOARD_RTT_CHANNEL, &frame, sizeof(frame)) != sizeof(frame)) s_drop_count++;

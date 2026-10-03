@@ -22,7 +22,11 @@ static uint8_t s_abort_pending;
 static struct {
     uint16_t id;
     bool active, nonzero, abort_requested;
+    uint32_t generated_ms, deadline_ms, abort_ms, abort_timeout_ms;
 } s_tx[2][3];
+
+static BspCanDeadlineDiagnostics s_deadline_diag[2];
+static void service_deadlines(unsigned index, uint32_t now);
 
 #define CAN_RECOVERY_STEP_TIMEOUT_MS 20U
 #define CAN_RECOVERY_RETRY_MS 1000U
@@ -166,6 +170,7 @@ bool BspCan_Start(BspCanChannel channel)
     unsigned index = (unsigned)channel - 1U;
     memset(&s_recovery[index], 0, sizeof(s_recovery[index]));
     memset(s_tx[index], 0, sizeof(s_tx[index]));
+    memset(&s_deadline_diag[index], 0, sizeof(s_deadline_diag[index]));
     s_started[index] = true;
     s_outputs_armed = false;
     s_healthy_seen = false;
@@ -192,12 +197,70 @@ static void latch_bus_fault(unsigned index, uint32_t now_ms)
     }
 }
 
+static void deadline_event(unsigned bus, unsigned kind, uint16_t id, unsigned slot,
+                           uint32_t generated, uint32_t age) {
+    BspCanDeadlineDiagnostics *d = &s_deadline_diag[bus];
+    d->last_id=id; d->last_slot=slot; d->last_generated_ms=generated;
+    d->last_event=kind; ++d->event_sequence;
+    /* Diagnostic event detail identifies its own bus/ID/slot, independent of yaw trace. */
+    trace_push(kind, (int32_t)age, ((bus+1U)<<24) | ((uint32_t)id<<8) | slot);
+}
+const BspCanDeadlineDiagnostics *BspCan_GetDeadlineDiagnostics(BspCanChannel channel) {
+    return channel >= BSP_CAN_CHANNEL_1 && channel <= BSP_CAN_CHANNEL_2
+        ? &s_deadline_diag[(unsigned)channel-1U] : NULL;
+}
+void BspCan_ReportExpiredSlot(BspCanChannel channel, uint16_t id, uint8_t slot, uint32_t generated) {
+    if (!BspCan_GetDeadlineDiagnostics(channel)) return;
+    unsigned b=(unsigned)channel-1U;
+    ++s_deadline_diag[b].software_expired;
+    deadline_event(b,10U,id,slot,generated,HAL_GetTick()-generated);
+}
+static void service_deadlines(unsigned b, uint32_t now) {
+    CAN_HandleTypeDef *h=handle_for((BspCanChannel)(b+1U));
+    BspCanDeadlineDiagnostics *d=&s_deadline_diag[b];
+    /* Sample completion before asking for cancellation; TXOK and abort may race. */
+    trace_poll((BspCanChannel)(b+1U));
+    for(unsigned m=0;m<3;m++) {
+        if(!s_tx[b][m].active) continue;
+        uint32_t age=now-s_tx[b][m].generated_ms;
+        if(age>d->max_inflight_age_ms)d->max_inflight_age_ms=age;
+        bool pending=HAL_CAN_IsTxMessagePending(h,1UL<<m);
+        if(s_tx[b][m].abort_requested) {
+            uint32_t wait=now-s_tx[b][m].abort_ms;
+            if(wait>d->max_abort_age_ms)d->max_abort_age_ms=wait;
+            if(!pending) {
+                bool sent=(h->Instance->TSR & (2UL << (8U*m)))!=0U;
+                if(sent)++d->abort_raced_txok;else ++d->abort_completed;
+                deadline_event(b,sent?14U:13U,s_tx[b][m].id,m,s_tx[b][m].generated_ms,wait);
+            } else if(wait>=s_tx[b][m].abort_timeout_ms) {
+                ++d->abort_failed;
+                deadline_event(b,15U,s_tx[b][m].id,m,s_tx[b][m].generated_ms,wait);
+                latch_bus_fault(b,now);return;
+            }
+        }
+        if(!pending){s_tx[b][m].active=false;continue;}
+        if(s_tx[b][m].nonzero && !s_tx[b][m].abort_requested &&
+           (int32_t)(now-s_tx[b][m].deadline_ms)>=0) {
+            ++d->inflight_expired;
+            deadline_event(b,11U,s_tx[b][m].id,m,s_tx[b][m].generated_ms,age);
+            if(HAL_CAN_AbortTxRequest(h,1UL<<m)!=HAL_OK) {
+                ++d->abort_failed;deadline_event(b,15U,s_tx[b][m].id,m,s_tx[b][m].generated_ms,age);
+                latch_bus_fault(b,now);return;
+            }
+            s_tx[b][m].abort_requested=true;s_tx[b][m].abort_ms=now;
+            ++d->abort_requests;
+            deadline_event(b,12U,s_tx[b][m].id,m,s_tx[b][m].generated_ms,age);
+        }
+    }
+}
+
 void BspCan_Service(uint32_t now_ms)
 {
     bool healthy = s_started[0] && s_started[1];
     for (unsigned i = 0U; i < 2U; ++i) {
         if (!s_started[i]) continue;
         CAN_HandleTypeDef *handle = handle_for((BspCanChannel)(i + 1U));
+        if (s_recovery[i].phase == 0U) service_deadlines(i, now_ms);
         BspCanRecovery *state = &s_recovery[i];
         uint32_t esr = handle->Instance->ESR;
         if ((esr & CAN_ESR_LEC) != 0U) state->last_error_esr = esr;
@@ -322,7 +385,8 @@ bool BspCan_Read(BspCanChannel channel, BspCanFrame *frame)
 static BspCanTxResult write_frame(BspCanChannel channel,
                   uint16_t standard_id,
                   const uint8_t *data,
-                  uint8_t length)
+                  uint8_t length, uint32_t generated_ms, uint32_t deadline_ms,
+                  uint32_t abort_timeout_ms)
 {
     CAN_HandleTypeDef *handle = handle_for(channel);
     if (!handle || !handle->Instance || standard_id > 0x7FFU || length > 8U || (length > 0U && !data)) {
@@ -331,6 +395,7 @@ static BspCanTxResult write_frame(BspCanChannel channel,
 
     unsigned index = (unsigned)channel - 1U;
     if (!s_started[index]) return BSP_CAN_TX_ERROR;
+    if (s_recovery[index].phase == 0U) service_deadlines(index, HAL_GetTick());
     if ((handle->Instance->ESR & CAN_ESR_BOFF) != 0U) {
         latch_bus_fault(index, HAL_GetTick());
         return BSP_CAN_TX_ERROR;
@@ -344,6 +409,7 @@ static BspCanTxResult write_frame(BspCanChannel channel,
     trace_poll(channel);
     bool nonzero = false;
     for (unsigned i = 0U; i < length; ++i) nonzero |= data[i] != 0U;
+    if (nonzero && (int32_t)(HAL_GetTick()-deadline_ms)>=0) return BSP_CAN_TX_ERROR;
     for (unsigned i = 0U; i < 3U; ++i) {
         if (!s_tx[index][i].active) continue;
         uint32_t mailbox_mask = 1UL << i;
@@ -356,9 +422,18 @@ static BspCanTxResult write_frame(BspCanChannel channel,
          * be allowed to finish. Full zero output is the stop exception. */
         if (length == 8U && !nonzero && s_tx[index][i].nonzero &&
             !s_tx[index][i].abort_requested) {
-            if (HAL_CAN_AbortTxRequest(handle, mailbox_mask) != HAL_OK)
+            if (HAL_CAN_AbortTxRequest(handle, mailbox_mask) != HAL_OK) {
+                ++s_deadline_diag[index].abort_failed;
+                deadline_event(index,15U,standard_id,i,s_tx[index][i].generated_ms,
+                               HAL_GetTick()-s_tx[index][i].generated_ms);
+                latch_bus_fault(index,HAL_GetTick());
                 return BSP_CAN_TX_ERROR;
+            }
             s_tx[index][i].abort_requested = true;
+            s_tx[index][i].abort_ms = HAL_GetTick();
+            ++s_deadline_diag[index].abort_requests;
+            deadline_event(index,12U,standard_id,i,s_tx[index][i].generated_ms,
+                           HAL_GetTick()-s_tx[index][i].generated_ms);
         }
         return BSP_CAN_TX_BUSY;
     }
@@ -375,6 +450,7 @@ static BspCanTxResult write_frame(BspCanChannel channel,
         memcpy(frame_data, data, length);
     }
     trace_poll(channel);
+    if (nonzero && (int32_t)(HAL_GetTick()-deadline_ms)>=0) return BSP_CAN_TX_ERROR;
     bool ok = HAL_CAN_AddTxMessage(handle, &header, frame_data, &mailbox) == HAL_OK;
     if (ok) {
         for (unsigned i = 0U; i < 3U; ++i) if (mailbox == (1UL << i)) {
@@ -382,6 +458,11 @@ static BspCanTxResult write_frame(BspCanChannel channel,
             s_tx[index][i].active = true;
             s_tx[index][i].nonzero = nonzero;
             s_tx[index][i].abort_requested = false;
+            s_tx[index][i].generated_ms=generated_ms;
+            s_tx[index][i].deadline_ms=deadline_ms;
+            s_tx[index][i].abort_timeout_ms=abort_timeout_ms;
+            uint32_t age=HAL_GetTick()-generated_ms;
+            if(age>s_deadline_diag[index].max_submit_age_ms)s_deadline_diag[index].max_submit_age_ms=age;
         }
     }
     if (ok && s_trace.channel == (uint32_t)channel) {
@@ -404,9 +485,13 @@ static BspCanTxResult write_frame(BspCanChannel channel,
     return ok ? BSP_CAN_TX_ACCEPTED : BSP_CAN_TX_ERROR;
 }
 
-BspCanTxResult BspCan_TryWrite(BspCanChannel channel, uint16_t standard_id, const uint8_t *data, uint8_t length)
+BspCanTxResult BspCan_TryWriteDeadline(BspCanChannel channel, uint16_t standard_id,
+    const uint8_t *data, uint8_t length, uint32_t generated_ms, uint32_t deadline_ms,
+    uint32_t abort_timeout_ms)
 {
-    BspCanTxResult result = write_frame(channel, standard_id, data, length);
+    if (!abort_timeout_ms || abort_timeout_ms > 65535U) return BSP_CAN_TX_ERROR;
+    BspCanTxResult result = write_frame(channel, standard_id, data, length,
+                                       generated_ms, deadline_ms, abort_timeout_ms);
     if (result != BSP_CAN_TX_ACCEPTED && s_trace.channel == (uint32_t)channel &&
         standard_id == s_trace.tx_id && data && length == 8U) {
         unsigned slot = s_trace.slot * 2U;
@@ -415,6 +500,11 @@ BspCanTxResult BspCan_TryWrite(BspCanChannel channel, uint16_t standard_id, cons
                    raw, s_trace.command_seq);
     }
     return result;
+}
+
+BspCanTxResult BspCan_TryWrite(BspCanChannel channel, uint16_t id, const uint8_t *data, uint8_t length) {
+    uint32_t now=HAL_GetTick();
+    return BspCan_TryWriteDeadline(channel,id,data,length,now,now+20U,20U);
 }
 
 bool BspCan_Write(BspCanChannel channel, uint16_t standard_id, const uint8_t *data, uint8_t length)

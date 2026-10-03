@@ -24,6 +24,7 @@ static bool frame_ready;
 static unsigned received_raw, received_decoded, received_commands;
 static uint16_t received_ids;
 static uint32_t receive_tick = 100;
+static uint32_t observed_generated, observed_deadline, observed_abort;
 uint32_t BspTime_NowMs(void) { return receive_tick; }
 uint32_t BspTime_NowUs(void) { return 100000; }
 bool BspCan_Start(BspCanChannel c) { (void)c; return true; }
@@ -179,7 +180,8 @@ static void test_latest_pending(const RobotConfig_t *robot) {
  assert(CAN_Manager_FlushTx(&can1_manager)==HAL_ERROR);
  disarm_on_submit=false; armed=true;
  assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK);
- expect(3,BSP_CAN_CHANNEL_1,0x2fe,0,0);
+ expect(3,BSP_CAN_CHANNEL_1,0x200,0,0);
+ expect(4,BSP_CAN_CHANNEL_1,0x2fe,0,0);
  count=0;
  /* CAN2 pitch slot coalesces to latest voltage command while hardware is busy. */
  assert(CAN_Manager_Init(&can2_manager,CAN_CHANNEL_2,&handles[1],robot,&registries[1])==HAL_OK);
@@ -195,6 +197,40 @@ static void test_latest_pending(const RobotConfig_t *robot) {
  puts("DJI latest pending: PASS (busy/error retry, overwrite, shared slots, fault purge)");
 }
 
+static void test_deadlines(const RobotConfig_t *robot) {
+ for(unsigned i=0;i<robot->total_motor_count;i++) {
+   assert(robot->motor_configs[i].tx_command_ttl_ms==20);
+   assert(robot->motor_configs[i].tx_abort_timeout_ms==20);
+ }
+ assert(CAN_Manager_Init(&can1_manager,CAN_CHANNEL_1,&handles[0],robot,&registries[0])==HAL_OK);
+ count=0;receive_tick=1000;submit_result=BSP_CAN_TX_BUSY;
+ CAN_Manager_SendMotorCurrent(&can1_manager,1,111);
+ receive_tick=1010;CAN_Manager_SendMotorCurrent(&can1_manager,2,222);
+ receive_tick=1020;submit_result=BSP_CAN_TX_ACCEPTED;
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK);
+ assert(frames[0].id==0x200 && frames[0].data[0]==0 && frames[0].data[1]==0);
+ assert(frames[0].data[2]==0 && frames[0].data[3]==222);
+ /* Successful submission must not erase the age watchdog. No new input => zero. */
+ receive_tick=1030;assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK);
+ expect(1,BSP_CAN_CHANNEL_1,0x200,1,0);
+ assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK && count==2);
+ /* Unsigned clock wrap, exactly 20ms expiry. */
+ receive_tick=UINT32_MAX-9;CAN_Manager_SendMotorCurrent(&can1_manager,1,444);
+ receive_tick=10;assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK);
+ expect(2,BSP_CAN_CHANNEL_1,0x200,0,0);
+ /* Configuration override flows through manager to BSP without resetting age. */
+ MotorConfig_t custom_motor=*MotorRegistry_FindByMotorId(&registries[0],1);
+ custom_motor.tx_command_ttl_ms=8;custom_motor.tx_abort_timeout_ms=12;
+ RobotConfig_t custom=*robot;custom.motor_configs=&custom_motor;custom.total_motor_count=1;
+ assert(CAN_Manager_Init(&can1_manager,CAN_CHANNEL_1,&handles[0],&custom,&registries[0])==HAL_OK);
+ receive_tick=2000;CAN_Manager_SendMotorCurrent(&can1_manager,1,123);
+ receive_tick=2003;assert(CAN_Manager_FlushTx(&can1_manager)==HAL_OK);
+ assert(observed_generated==2000 && observed_deadline==2008 && observed_abort==12);
+ assert(CAN_Manager_Init(&can1_manager,CAN_CHANNEL_1,&handles[0],robot,&registries[0])==HAL_OK);
+ receive_tick=100;count=0;
+ puts("DJI expiry: PASS (per-slot age, partial refresh, no new command, clock wrap)");
+}
+
 int main(void)
 {
     const RobotConfig_t *robot = RobotConfig_Get();
@@ -208,6 +244,7 @@ int main(void)
     assert(CAN_Manager_Init(&can2_manager, CAN_CHANNEL_2, &handles[1], robot, &registries[1]) == HAL_OK);
     test_receive_overload(robot);
     test_latest_pending(robot);
+    test_deadlines(robot);
     assert(adapter->command_current(5, 30000) == ROBOT_STATUS_OK);
     assert(adapter->command_current(8, -30000) == ROBOT_STATUS_OK);
     adapter->flush();
@@ -277,4 +314,13 @@ BspCanTxResult BspCan_TryWrite(BspCanChannel c, uint16_t id, const uint8_t *d, u
  if (disarm_on_submit) { armed=false; return BSP_CAN_TX_ERROR; }
  if (submit_result != BSP_CAN_TX_ACCEPTED) return submit_result;
  return BspCan_Write(c,id,d,n) ? BSP_CAN_TX_ACCEPTED : BSP_CAN_TX_ERROR;
+}
+
+BspCanTxResult BspCan_TryWriteDeadline(BspCanChannel c,uint16_t id,const uint8_t *d,uint8_t n,
+ uint32_t generated,uint32_t deadline,uint32_t abort_ms) {
+ observed_generated=generated;observed_deadline=deadline;observed_abort=abort_ms;
+ return BspCan_TryWrite(c,id,d,n);
+}
+void BspCan_ReportExpiredSlot(BspCanChannel c,uint16_t id,uint8_t slot,uint32_t generated) {
+ (void)c;(void)id;(void)slot;(void)generated;
 }
