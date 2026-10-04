@@ -7,12 +7,13 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "sentry_bridge_protocol.h"
 
 // Vision communication now uses USB CDC instead of UART
 // #define VISION_UART_HANDLE huart6  // Old UART method
 
 #define VISION_RECV_SIZE 18u
-#define VISION_SEND_SIZE 36u  // Buffer capacity; the current 3-float frame uses 22 bytes
+#define VISION_SEND_SIZE 64u  // SP and ST frames share the CDC transmit buffer.
 
 #pragma pack(1)
 
@@ -138,6 +139,13 @@ Vision_Recv_s *VisionComm_GetData(void);
  * @param len Receive data length
  */
 void VisionComm_RxCallback(uint8_t *buf, uint32_t len);
+
+/* Sentry bridge command state. A false return means the command is absent or
+ * older than SENTRY_BRIDGE_CMD_TIMEOUT_MS and must not drive the chassis. */
+bool VisionComm_GetSentryCommand(SentryBridgeCommand *command);
+void VisionComm_SetSentryTelemetry(float cmd_vx, float cmd_vy, float cmd_wz,
+                                   float real_vx, float real_vy, float real_wz);
+void VisionComm_SendSentryTelemetry(void);
 
 /**
  * @brief Compatibility no-op; USB CDC reception starts in the USB stack

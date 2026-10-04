@@ -17,6 +17,61 @@
 #include <stdio.h>
 #include <math.h>
 
+static SentryBridgeCommand sentry_command;
+static SentryBridgeTelemetry sentry_telemetry;
+static uint8_t sentry_stream[256];
+static uint16_t sentry_stream_len;
+
+static void sentry_consume_stream(const uint8_t *data, uint32_t length)
+{
+    if (!data || length == 0U) return;
+    if (length > sizeof(sentry_stream)) length = sizeof(sentry_stream);
+    if ((uint32_t)sentry_stream_len + length > sizeof(sentry_stream)) {
+        uint16_t drop = (uint16_t)((uint32_t)sentry_stream_len + length -
+                                   sizeof(sentry_stream));
+        if (drop >= sentry_stream_len) sentry_stream_len = 0U;
+        else {
+            memmove(sentry_stream, sentry_stream + drop,
+                    sentry_stream_len - drop);
+            sentry_stream_len = (uint16_t)(sentry_stream_len - drop);
+        }
+    }
+    memcpy(sentry_stream + sentry_stream_len, data, length);
+    sentry_stream_len = (uint16_t)(sentry_stream_len + length);
+
+    while (sentry_stream_len >= 2U) {
+        uint16_t header = 0xFFFFU;
+        for (uint16_t i = 0U; i + 1U < sentry_stream_len; ++i) {
+            if (sentry_stream[i] == 'S' && sentry_stream[i + 1U] == 'X') {
+                header = i;
+                break;
+            }
+        }
+        if (header == 0xFFFFU) {
+            sentry_stream[0] = sentry_stream[sentry_stream_len - 1U];
+            sentry_stream_len = (sentry_stream[0] == 'S') ? 1U : 0U;
+            break;
+        }
+        if (header > 0U) {
+            memmove(sentry_stream, sentry_stream + header,
+                    sentry_stream_len - header);
+            sentry_stream_len = (uint16_t)(sentry_stream_len - header);
+        }
+        if (sentry_stream_len < SENTRY_BRIDGE_SX_SIZE) break;
+        if (SentryBridge_ParseSx(sentry_stream, SENTRY_BRIDGE_SX_SIZE,
+                                 &sentry_command, BspTime_NowMs())) {
+            memmove(sentry_stream, sentry_stream + SENTRY_BRIDGE_SX_SIZE,
+                    sentry_stream_len - SENTRY_BRIDGE_SX_SIZE);
+            sentry_stream_len = (uint16_t)(sentry_stream_len -
+                                            SENTRY_BRIDGE_SX_SIZE);
+        } else {
+            memmove(sentry_stream, sentry_stream + 1U,
+                    sentry_stream_len - 1U);
+            --sentry_stream_len;
+        }
+    }
+}
+
 static Vision_Recv_s recv_data;
 static Vision_Send_s send_data;
 
@@ -49,6 +104,28 @@ static bool ema_initialized = false;
  */
 void VisionComm_RxCallback(uint8_t *buf, uint32_t len)
 {
+#if defined(ROBOT_TYPE_sentry_swerve)
+    /* Keep the existing fixed-length Seasky vision command compatible while
+     * SX uses the new stream parser. */
+    if (len == VISION_RECV_SIZE &&
+        buf && buf[0] != 'S') {
+        uint16_t flag_register;
+        memcpy(cdc_recv_processing, buf, VISION_RECV_SIZE);
+        if (get_protocol_info(cdc_recv_processing, &flag_register,
+                              (uint8_t *)&recv_data.pitch) == 0x0001U) {
+            recv_data.fire_mode = (Fire_Mode_e)(flag_register & 0x03U);
+            recv_data.target_state =
+                (Target_State_e)((flag_register >> 2U) & 0x03U);
+            recv_data.target_type =
+                (Target_Type_e)((flag_register >> 4U) & 0x0FU);
+            recv_data.updated = 1U;
+            (void)MsgCenter_Publish(TOPIC_VISION_DATA, &recv_data,
+                                    sizeof(Vision_Recv_s));
+        }
+    }
+    sentry_consume_stream(buf, len);
+    return;
+#else
     uint16_t flag_register;
 
     // Copy data to processing buffer
@@ -76,6 +153,7 @@ void VisionComm_RxCallback(uint8_t *buf, uint32_t len)
 
     // Note: USB CDC reception is handled automatically by the USB stack
     // No need to manually restart reception like with UART
+#endif
 }
 
 /**
@@ -105,7 +183,12 @@ static void on_imu_update(const MsgEvent *ev, void *user_data)
             // Set attitude data from gimbal IMU
             VisionComm_SetAltitude(sensor_data->g_gz, sensor_data->g_gx, sensor_data->g_gy);
             VisionComm_SetFlag(COLOR_BLUE, VISION_MODE_AIM, SMALL_AMU_15);
+#if defined(ROBOT_TYPE_sentry_swerve)
+            /* CDC permits one in-flight transfer; prioritize bridge telemetry. */
+            VisionComm_SendSentryTelemetry();
+#else
             VisionComm_Send();
+#endif
 
             last_send_time = current_time;
         }
@@ -121,6 +204,12 @@ Vision_Recv_s *VisionComm_Init(void)
     memset(&recv_data, 0, sizeof(Vision_Recv_s));
     memset(&send_data, 0, sizeof(Vision_Send_s));
     memset(cdc_recv_processing, 0, sizeof(cdc_recv_processing));
+#if defined(ROBOT_TYPE_sentry_swerve)
+    memset(&sentry_command, 0, sizeof(sentry_command));
+    memset(&sentry_telemetry, 0, sizeof(sentry_telemetry));
+    memset(sentry_stream, 0, sizeof(sentry_stream));
+    sentry_stream_len = 0U;
+#endif
 
     // Initialize diagnostics
     memset(&g_diag, 0, sizeof(VisionDiagnostics));
@@ -146,6 +235,49 @@ Vision_Recv_s *VisionComm_Init(void)
     // No need to manually start reception
 
     return &recv_data;
+}
+
+bool VisionComm_GetSentryCommand(SentryBridgeCommand *command)
+{
+    if (!command) return false;
+#if defined(ROBOT_TYPE_sentry_swerve)
+    *command = sentry_command;
+    if (!command->valid ||
+        (uint32_t)(BspTime_NowMs() - command->received_ms) >
+            SENTRY_BRIDGE_CMD_TIMEOUT_MS) {
+        command->valid = false;
+    }
+    return command->valid;
+#else
+    memset(command, 0, sizeof(*command));
+    return false;
+#endif
+}
+
+void VisionComm_SetSentryTelemetry(float cmd_vx, float cmd_vy, float cmd_wz,
+                                   float real_vx, float real_vy, float real_wz)
+{
+#if defined(ROBOT_TYPE_sentry_swerve)
+    sentry_telemetry.cmd_vx = cmd_vx;
+    sentry_telemetry.cmd_vy = cmd_vy;
+    sentry_telemetry.cmd_wz = cmd_wz;
+    sentry_telemetry.real_vx = real_vx;
+    sentry_telemetry.real_vy = real_vy;
+    sentry_telemetry.real_wz = real_wz;
+#else
+    (void)cmd_vx; (void)cmd_vy; (void)cmd_wz;
+    (void)real_vx; (void)real_vy; (void)real_wz;
+#endif
+}
+
+void VisionComm_SendSentryTelemetry(void)
+{
+#if defined(ROBOT_TYPE_sentry_swerve)
+    uint8_t frame[SENTRY_BRIDGE_ST_SIZE];
+    if (SentryBridge_BuildSt(&sentry_telemetry, frame, sizeof(frame)) != 0U) {
+        (void)BspUsb_Write(frame, sizeof(frame));
+    }
+#endif
 }
 
 /**

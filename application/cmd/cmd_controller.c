@@ -10,6 +10,9 @@
 #include "motor_service.h"
 #include "robot_config.h"
 #include "bsp_time.h"
+#if defined(ROBOT_TYPE_sentry_swerve)
+#include "vision_comm.h"
+#endif
 #include <math.h>
 #include <string.h>
 
@@ -138,6 +141,12 @@ void CmdController_Task(uint32_t current_tick) {
         (uint32_t)(current_tick - s_last_remote_ms) <= REMOTE_LOSS_TIMEOUT_MS;
 
     bool remote_online = s_input.remote_online;
+#if defined(ROBOT_TYPE_sentry_swerve)
+    SentryBridgeCommand sentry_command;
+    bool sentry_online = VisionComm_GetSentryCommand(&sentry_command);
+#else
+    bool sentry_online = false;
+#endif
     if (!BspCan_OutputsArmed()) {
         bool neutral = remote_online && BspCan_RecoveryReady(current_tick) &&
             switch_is_down(s_input.remote.rc.s[0]) && switch_is_down(s_input.remote.rc.s[1]);
@@ -154,11 +163,15 @@ void CmdController_Task(uint32_t current_tick) {
         }
         /* Publish one final disabled command set even on the arming cycle. */
         s_input.remote_online = false;
+        sentry_online = false;
     } else {
         s_neutral_seen = false;
     }
 
     update_yaw_heading();
+    /* The bridge command is a chassis-level override. It shares the existing
+     * command topic, so swerve kinematics and CAN output remain unchanged. */
+    s_input.remote_online = remote_online || sentry_online;
     RobotStatus route_status = CommandRouter_Route(&s_router,
                                                     &s_input,
                                                     current_tick,
@@ -169,6 +182,18 @@ void CmdController_Task(uint32_t current_tick) {
         return;
     }
     s_input.vision_updated = false;
+
+#if defined(ROBOT_TYPE_sentry_swerve)
+    if (sentry_online) {
+        s_output.chassis.vx = sentry_command.vx;
+        s_output.chassis.vy = sentry_command.vy;
+        s_output.chassis.wz = sentry_command.wz;
+        s_output.chassis.enabled = true;
+    }
+    VisionComm_SetSentryTelemetry(s_output.chassis.vx, s_output.chassis.vy,
+                                  s_output.chassis.wz,
+                                  0.0f, 0.0f, 0.0f);
+#endif
 
     /* 把本次路由实际使用的输入随结果发送，避免与下一条RC消息错配。 */
     s_output.gimbal.trace = (GimbalCommandTrace){

@@ -227,6 +227,7 @@ add_library(modules STATIC
     modules/vision_comm/crc16.c
     modules/vision_comm/seasky_protocol.c
     modules/vision_comm/vision_comm.c
+    modules/vision_comm/sentry_bridge_protocol.c
     modules/vision_comm/vision_config.c
     modules/vision_comm/vision_cmd.c
 )

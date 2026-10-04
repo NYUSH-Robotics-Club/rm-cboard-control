@@ -238,4 +238,11 @@ done
   "$repo_root/application/gimbal/pitch_control_math.c" "$repo_root/tests/host/test_pitch_control_math.c" \
   -lm -o "$test_build/test_pitch_control_math"
 "$test_build/test_pitch_control_math"
+
+"$cc" $common_flags \
+  -I"$repo_root/modules/vision_comm" \
+  "$repo_root/modules/vision_comm/sentry_bridge_protocol.c" \
+  "$repo_root/tests/host/test_sentry_bridge_protocol.c" \
+  -lm -o "$test_build/test_sentry_bridge_protocol"
+"$test_build/test_sentry_bridge_protocol"
 echo "host tests: PASS"
