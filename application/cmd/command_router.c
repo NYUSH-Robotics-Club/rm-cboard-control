@@ -47,6 +47,27 @@ static void gimbal_to_chassis_frame(float vx_g,
     *vy_c = sine * vx_g + cosine * vy_g;
 }
 
+bool CommandRouter_GimbalToChassis(const CommandRouterInput *input,
+                                   uint32_t now_ms,
+                                   float vx_g,
+                                   float vy_g,
+                                   float *vx_c,
+                                   float *vy_c) {
+    if (!vx_c || !vy_c) return false;
+    *vx_c = 0.0f;
+    *vy_c = 0.0f;
+    if (!input || !input->encoder_follow || !input->yaw_heading_valid ||
+        !isfinite(input->yaw_relative_deg) ||
+        !isfinite(vx_g) || !isfinite(vy_g) ||
+        (uint32_t)(now_ms - input->yaw_feedback_ms) > FOLLOW_FEEDBACK_TIMEOUT_MS) {
+        return false;
+    }
+    /* The calibrated encoder sign is owned by update_yaw_heading(); neither
+     * the RC nor Nav2 path applies a second 180-degree sensor correction. */
+    gimbal_to_chassis_frame(vx_g, vy_g, -input->yaw_relative_deg, vx_c, vy_c);
+    return true;
+}
+
 static int16_t apply_deadband(int16_t value) {
     return (value > -JOYSTICK_DEADBAND && value < JOYSTICK_DEADBAND)
                ? 0
@@ -104,14 +125,8 @@ static void route_chassis(CommandRouter *router,
         /* 用实际云台相对角旋转平移向量，+x前、+y左；不再额外交换轴。
          * 方位失效就禁用整条底盘命令，不能退回另一坐标系继续运动。
          */
-        if (!input->yaw_heading_valid || !isfinite(input->yaw_relative_deg) ||
-            (uint32_t)(now_ms - input->yaw_feedback_ms) > FOLLOW_FEEDBACK_TIMEOUT_MS) {
-            return;
-        }
-        /* yaw_relative_deg描述底盘相对云台的逆时针角；将云台坐标向量
-         * 变回底盘坐标时必须使用逆旋转。否则云台在±90度时前后方向反转。 */
-        gimbal_to_chassis_frame(vx, vy, -input->yaw_relative_deg,
-                               &command->vx, &command->vy);
+        if (!CommandRouter_GimbalToChassis(input, now_ms, vx, vy,
+                                           &command->vx, &command->vy)) return;
         command->wz = wz;
         command->enabled =
         (vx_raw != 0) ||

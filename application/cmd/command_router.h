@@ -56,6 +56,16 @@ typedef struct {
 
 void CommandRouter_Init(CommandRouter *router);
 
+/* Convert normalized gimbal-frame translation to chassis frame using fresh
+ * infantry yaw-encoder feedback. Returns false and zeros outputs on failure.
+ * Shared by RC follow mode and the autonomous chassis override. */
+bool CommandRouter_GimbalToChassis(const CommandRouterInput *input,
+                                   uint32_t now_ms,
+                                   float vx_g,
+                                   float vy_g,
+                                   float *vx_c,
+                                   float *vy_c);
+
 /*
  * Build one command set. now_ms controls feedback/vision expiry and spin dt.
  * Outputs are normalized except for documented angle fields in GimbalCmd.

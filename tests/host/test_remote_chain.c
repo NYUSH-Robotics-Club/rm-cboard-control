@@ -7,6 +7,7 @@
 #include "nyush_remote.h"
 #include "message_center.h"
 #include "cmd_controller.h"
+#include "vision_comm.h"
 #include "command_router.h"
 #include "logger.h"
 #include "motor_service.h"
@@ -22,6 +23,13 @@ UART_HandleTypeDef huart3 = { .Instance=&test_uart, .hdmarx=&hdma_usart3_rx };
 static uint32_t now_ms;
 static bool can_armed = true;
 static bool can_ready = true;
+static bool bridge_valid;
+static SentryBridgeCommand bridge_command;
+bool VisionComm_GetSentryCommand(SentryBridgeCommand *command)
+{
+    if (command) *command = bridge_command;
+    return bridge_valid;
+}
 static ChassisFollowConfig follow;
 static RobotConfig_t robot;
 static MotorSnapshot yaw_snapshot;
@@ -228,5 +236,74 @@ int main(void)
     assert(gimbal.trace.rc_dispatch_ms == now_ms && gimbal.trace.route_ms == now_ms);
     now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(gimbal.trace.rc_sequence == old_rc_seq + 1 && gimbal.trace.route_sequence == old_route_seq + 2);
+    /* Nav2 uses the same gimbal-forward frame as RC follow mode. Its override
+     * must rotate with fresh encoder feedback in every switch position. */
+    follow.yaw_ccw_sign = g_robot_config_infantry_standard.chassis_follow->yaw_ccw_sign;
+    bridge_valid = true;
+    bridge_command = (SentryBridgeCommand){.vx=0.25f, .vy=-0.2f, .wz=0.3f};
+    remote.rc.s[0] = RC_SW_DOWN;
+    remote.rc.ch[0] = remote.rc.ch[2] = remote.rc.ch[3] = remote.rc.ch[4] = 0;
+    const int8_t switches[] = {RC_SW_DOWN, RC_SW_MID, RC_SW_UP};
+    const float nav_positions[] = {forward, fmodf(forward+2048,8192),
+                                   fmodf(forward+6144,8192), fmodf(forward+4096,8192)};
+    const float nav_expected[][2] = {{0.25f,-0.2f}, {0.2f,0.25f},
+                                     {-0.2f,-0.25f}, {-0.25f,0.2f}};
+    for (unsigned p = 0; p < 4U; ++p) {
+        yaw_snapshot.position = nav_positions[p];
+        for (unsigned i = 0; i < 3U; ++i) {
+            remote.rc.s[1] = switches[i];
+            now_ms += 4;
+            yaw_snapshot.feedback_timestamp_ms = now_ms;
+            MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+            MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+            assert(chassis.enabled && fabsf(chassis.vx-nav_expected[p][0])<0.0001f);
+            assert(fabsf(chassis.vy-nav_expected[p][1])<0.0001f &&
+                   fabsf(chassis.wz-0.3f)<1e-6f);
+        }
+    }
+    /* The spin switch must not retain its RC spin command when Nav2 loses
+     * valid gimbal orientation. A manual down-mode stick still takes priority. */
+    now_ms += 21;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled && chassis.vx == 0 && chassis.vy == 0 && chassis.wz == 0);
+    yaw_snapshot.feedback_timestamp_ms = now_ms;
+    yaw_snapshot.feedback_valid = false;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled);
+    yaw_snapshot.feedback_valid = true;
+    yaw_snapshot.position = forward;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(chassis.enabled && fabsf(chassis.vx-0.25f)<1e-6f);
+    remote.rc.s[1] = RC_SW_DOWN;
+    remote.rc.ch[3] = 330;
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(chassis.enabled && fabsf(chassis.vx-0.5f)<1e-6f);
+    remote.rc.ch[3] = 0;
+    remote.rc.ch[4] = 120;
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(chassis.enabled && fabsf(chassis.vx)<1e-6f);
+    remote.rc.ch[4] = 0;
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(chassis.enabled && fabsf(chassis.vx-0.25f)<1e-6f);
+    bridge_command.vx = 2.0f;
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled);
+    bridge_command.vx = 0.25f;
+    now_ms += 201; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled); /* RC timeout wins even with a fresh bridge frame. */
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch();
+    can_armed = false;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled); /* CAN disarm wins over Nav2. */
+    can_armed = true;
+    bridge_valid = false;
     puts("nyush remote chain: PASS (original registry/decoder/daemon, source provenance, TC/IDLE, snapshot, BUSY retry without abort, command mapping, loss, error and reconnection)");
 }

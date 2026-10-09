@@ -270,14 +270,14 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .pid_inner = {100.0f, 5.0f, 0.0f, 8000.0f, 500.0f}
     }};
 
-/* 用户确认：X形±45°，前后/左右轮中心距均0.54m，轮半径0.07m，M3508 P19。
+/* 当前源码配置：X形±45°，前后/左右轮中心距均0.54m，轮半径0.0775m（用户提供轮径15.5cm），M3508 P19。
  * 正驱动向量统一取向前分量为正；电机正反向另由MotorConfig.direction修正。
  * P19手册减速比3591/187；速度是初调上限，首次架空核对四轮方向后再落地。
  */
 #define OMNI_HALF_TRACK_M 0.27f
 #define OMNI_HALF_WHEELBASE_M 0.27f
 #define OMNI_DIAGONAL_UNIT 0.70710678118655f
-#define OMNI_RADIUS_M 0.07f
+#define OMNI_RADIUS_M 0.0775f
 #define M3508_P19_REDUCTION (3591.0f / 187.0f)
 
 static const OmniChassisConfig g_omni_infantry = {

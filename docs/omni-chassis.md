@@ -2,7 +2,7 @@
 
 `config/robots/infantry_standard.c` 选择 `CHASSIS_TYPE_OMNI`，使用
 `adapters/chassis/omni_chassis_strategy.c` 的参数化逆运动学。
-当前配置为 X 形 ±45°、前后及左右轮中心距 0.54 m、轮半径 0.07 m、
+当前配置为 X 形 ±45°、前后及左右轮中心距 0.54 m、轮半径 0.0775 m、
 M3508 + P19（减速比 3591/187）。以下均为**源码配置**，并非当前板上
 镜像或实车方向的证明。
 

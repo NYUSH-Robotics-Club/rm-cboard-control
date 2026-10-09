@@ -12,6 +12,7 @@
 #include "gyro_data.h"
 #include "bsp_time.h"
 #include "bsp_usb.h"
+#include "bsp_critical.h"
 #include "logger.h"
 #include <string.h>
 #include <stdio.h>
@@ -58,8 +59,12 @@ static void sentry_consume_stream(const uint8_t *data, uint32_t length)
             sentry_stream_len = (uint16_t)(sentry_stream_len - header);
         }
         if (sentry_stream_len < SENTRY_BRIDGE_SX_SIZE) break;
+        SentryBridgeCommand parsed;
         if (SentryBridge_ParseSx(sentry_stream, SENTRY_BRIDGE_SX_SIZE,
-                                 &sentry_command, BspTime_NowMs())) {
+                                 &parsed, BspTime_NowMs())) {
+            BspCriticalState critical = BspCritical_Enter();
+            sentry_command = parsed;
+            BspCritical_Exit(critical);
             memmove(sentry_stream, sentry_stream + SENTRY_BRIDGE_SX_SIZE,
                     sentry_stream_len - SENTRY_BRIDGE_SX_SIZE);
             sentry_stream_len = (uint16_t)(sentry_stream_len -
@@ -104,7 +109,7 @@ static bool ema_initialized = false;
  */
 void VisionComm_RxCallback(uint8_t *buf, uint32_t len)
 {
-#if defined(ROBOT_TYPE_sentry_swerve)
+#if defined(ROBOT_TYPE_sentry_swerve) || defined(ROBOT_TYPE_infantry_standard)
     /* Keep the existing fixed-length Seasky vision command compatible while
      * SX uses the new stream parser. */
     if (len == VISION_RECV_SIZE &&
@@ -204,7 +209,7 @@ Vision_Recv_s *VisionComm_Init(void)
     memset(&recv_data, 0, sizeof(Vision_Recv_s));
     memset(&send_data, 0, sizeof(Vision_Send_s));
     memset(cdc_recv_processing, 0, sizeof(cdc_recv_processing));
-#if defined(ROBOT_TYPE_sentry_swerve)
+#if defined(ROBOT_TYPE_sentry_swerve) || defined(ROBOT_TYPE_infantry_standard)
     memset(&sentry_command, 0, sizeof(sentry_command));
     memset(&sentry_telemetry, 0, sizeof(sentry_telemetry));
     memset(sentry_stream, 0, sizeof(sentry_stream));
@@ -240,8 +245,10 @@ Vision_Recv_s *VisionComm_Init(void)
 bool VisionComm_GetSentryCommand(SentryBridgeCommand *command)
 {
     if (!command) return false;
-#if defined(ROBOT_TYPE_sentry_swerve)
+#if defined(ROBOT_TYPE_sentry_swerve) || defined(ROBOT_TYPE_infantry_standard)
+    BspCriticalState critical = BspCritical_Enter();
     *command = sentry_command;
+    BspCritical_Exit(critical);
     if (!command->valid ||
         (uint32_t)(BspTime_NowMs() - command->received_ms) >
             SENTRY_BRIDGE_CMD_TIMEOUT_MS) {

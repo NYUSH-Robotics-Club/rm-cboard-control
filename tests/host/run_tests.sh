@@ -72,6 +72,7 @@ common_flags="-std=c11 -Wall -Wextra -Werror"
   -I"$repo_root/core/common" -I"$repo_root/modules/remote" \
   -I"$repo_root/bsp/can" -I"$repo_root/bsp/remote" -I"$repo_root/bsp/time" -I"$repo_root/modules/message_center" \
   -I"$repo_root/modules/logger" -I"$repo_root/bsp/critical" \
+  -I"$repo_root/modules/vision_comm" \
   "$repo_root/bsp/remote/bsp_rc.c" "$repo_root/bsp/remote/nyush_usart.c" \
   "$repo_root/modules/remote/nyush_remote.c" "$repo_root/modules/remote/nyush_daemon.c" \
   "$repo_root/modules/remote/nyush_crc16.c" \

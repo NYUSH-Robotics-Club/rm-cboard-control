@@ -10,7 +10,7 @@
 #include "motor_service.h"
 #include "robot_config.h"
 #include "bsp_time.h"
-#if defined(ROBOT_TYPE_sentry_swerve)
+#if defined(ROBOT_TYPE_sentry_swerve) || defined(ROBOT_TYPE_infantry_standard)
 #include "vision_comm.h"
 #endif
 #include <math.h>
@@ -141,13 +141,16 @@ void CmdController_Task(uint32_t current_tick) {
         (uint32_t)(current_tick - s_last_remote_ms) <= REMOTE_LOSS_TIMEOUT_MS;
 
     bool remote_online = s_input.remote_online;
-#if defined(ROBOT_TYPE_sentry_swerve)
+#if defined(ROBOT_TYPE_sentry_swerve) || defined(ROBOT_TYPE_infantry_standard)
     SentryBridgeCommand sentry_command;
     bool sentry_online = VisionComm_GetSentryCommand(&sentry_command);
 #else
     bool sentry_online = false;
 #endif
-    if (!BspCan_OutputsArmed()) {
+    /* Latch the pre-cycle arm state: recovery must still publish one disabled
+     * cycle even if TryArm succeeds below. */
+    bool outputs_armed_for_cycle = BspCan_OutputsArmed();
+    if (!outputs_armed_for_cycle) {
         bool neutral = remote_online && BspCan_RecoveryReady(current_tick) &&
             switch_is_down(s_input.remote.rc.s[0]) && switch_is_down(s_input.remote.rc.s[1]);
         for (unsigned i = 0U; i < 5U; ++i) {
@@ -171,7 +174,13 @@ void CmdController_Task(uint32_t current_tick) {
     update_yaw_heading();
     /* The bridge command is a chassis-level override. It shares the existing
      * command topic, so swerve kinematics and CAN output remain unchanged. */
-    s_input.remote_online = remote_online || sentry_online;
+#if defined(ROBOT_TYPE_sentry_swerve)
+    s_input.remote_online = outputs_armed_for_cycle &&
+                            (remote_online || sentry_online);
+#else
+    /* The omni robot requires a live RC even when Nav2 has a fresh frame. */
+    s_input.remote_online = outputs_armed_for_cycle && remote_online;
+#endif
     RobotStatus route_status = CommandRouter_Route(&s_router,
                                                     &s_input,
                                                     current_tick,
@@ -193,6 +202,40 @@ void CmdController_Task(uint32_t current_tick) {
     VisionComm_SetSentryTelemetry(s_output.chassis.vx, s_output.chassis.vy,
                                   s_output.chassis.wz,
                                   0.0f, 0.0f, 0.0f);
+#elif defined(ROBOT_TYPE_infantry_standard)
+    /* RC chassis axes take priority in all three switch positions. The
+     * gimbal axes do not interrupt autonomous chassis translation. A live RC
+     * and armed CAN are mandatory, so a lost controller never enables Nav2. */
+    const RemoteChannels *rc = &s_input.remote.rc;
+    bool manual_chassis =
+        rc->ch[2] < -3 || rc->ch[2] > 3 ||
+        rc->ch[3] < -3 || rc->ch[3] > 3 ||
+        rc->ch[4] < -15 || rc->ch[4] > 15;
+    if (sentry_online && remote_online && BspCan_OutputsArmed() &&
+        !manual_chassis) {
+        float chassis_vx = 0.0f, chassis_vy = 0.0f;
+        bool command_valid = isfinite(sentry_command.vx) &&
+            isfinite(sentry_command.vy) && isfinite(sentry_command.wz) &&
+            fabsf(sentry_command.vx) <= 1.0f &&
+            fabsf(sentry_command.vy) <= 1.0f &&
+            fabsf(sentry_command.wz) <= 1.0f &&
+            sentry_command.vx * sentry_command.vx +
+                sentry_command.vy * sentry_command.vy <= 1.0001f;
+        /* Odin/Nav2 uses the gimbal-forward virtual base frame. Match the RC
+         * middle-position conversion before the normalized chassis command
+         * reaches the omni wheel strategy. Stale yaw must stop autonomous
+         * output even when the RC switch is in spin mode. */
+        if (command_valid && CommandRouter_GimbalToChassis(
+                &s_input, current_tick, sentry_command.vx, sentry_command.vy,
+                &chassis_vx, &chassis_vy)) {
+            s_output.chassis.vx = chassis_vx;
+            s_output.chassis.vy = chassis_vy;
+            s_output.chassis.wz = sentry_command.wz;
+            s_output.chassis.enabled = true;
+        } else {
+            s_output.chassis = (ChassisCmd){0};
+        }
+    }
 #endif
 
     /* 把本次路由实际使用的输入随结果发送，避免与下一条RC消息错配。 */
