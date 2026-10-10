@@ -47,6 +47,7 @@ typedef struct {
     bool enabled;
     float pitch_rate;
     float yaw_rate;
+    float yaw_speed_cap_rpm; /* 0: normal control; positive: localization sweep speed target cap. */
     float yaw_rate_memo;
     float yaw_target_memo;
     bool vision_valid;

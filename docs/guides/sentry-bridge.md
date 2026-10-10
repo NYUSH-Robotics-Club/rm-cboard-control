@@ -84,14 +84,35 @@ default is true in both the Odin navigation and Foxglove launches; pass
 On the omni firmware, all RC switch positions allow fresh Nav2 commands while
 the chassis translation sticks and rotation dial are neutral. Moving any of
 those inputs selects the RC chassis command immediately. Gimbal stick motion
-does not interrupt Nav2 chassis control. RC loss, CAN disarm, invalid normalized
-SX values, SX expiry, or missing/stale yaw-encoder feedback exclude Nav2.
+does not interrupt Nav2 chassis control. With no RC, the Odin sender's A3
+autonomy flag `0x40` lets a fresh bridge command supply neutral operator inputs;
+the shooter remains disabled. Following CAN recovery, a fresh autonomy flag
+with zero chassis speed must remain stable for 500 ms before outputs arm. CAN
+disarm, invalid normalized SX values, SX expiry, or missing/stale yaw-encoder
+feedback exclude Nav2.
 Invalid feedback zeros the autonomous chassis command, including in the RC
 spin position; a nonneutral RC chassis input still takes manual priority.
 This policy does not change the existing sentry-swerve bridge override.
 
 The `ST.real_*` fields are still not measured velocity. Nav2 must continue to
 use Odin localization and `/odin1/odometry` rather than bridge odometry.
+
+For Odin relocalization, the Jetson's `wait_odin_localization.py` sends A3 robot
+control frames through the radar PTY while live Odin odometry is present. It
+requests continuous yaw rotation in one direction at 60 deg/s, including full
+360-degree turns, until localization succeeds. Loss of live Odin odometry or
+eight seconds without measured turning stops the request. The bridge forwards this as SX scan
+control with Odin-only scan flag `0x20` and autonomy flag `0x40`; normal vision scan commands do not enable
+this feature on `infantry_standard`. The C board converts the requested deg/s
+to its configured normalized manual yaw rate, rejects requests over 60 deg/s,
+and caps the localization yaw motor speed reference at the requested rate / 6 RPM
+(10 RPM at 60 deg/s). Localization target lead is limited to 10 deg so a
+speed-limited position loop cannot accumulate an unbounded target error.
+RC yaw/pitch sticks and active vision targets take priority; RC spin/exit-brake
+hold also takes priority. On localization success, Odin loss, or process stop,
+the Jetson sends an explicit stop frame; SX expiry stops an interrupted sender.
+The bridge must be running before Relocalize or Navigate to enable the sweep.
+The sweep does not replace moving the whole robot when scene matching fails.
 
 ## Safety behavior
 

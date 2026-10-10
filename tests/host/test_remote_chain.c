@@ -52,6 +52,7 @@ bool BspCan_TryArm(uint32_t now) { (void)now; can_armed = can_ready; return can_
 static HAL_UART_RxEventTypeTypeDef event_type;
 static ChassisCmd chassis;
 static GimbalCmd gimbal;
+static ShootCmd shooter;
 uint32_t HAL_GetTick(void) { return now_ms; }
 uint32_t BspTime_NowMs(void) { return now_ms; }
 HAL_UART_RxEventTypeTypeDef HAL_UARTEx_GetRxEventType(UART_HandleTypeDef *h)
@@ -80,7 +81,8 @@ static void on_command(const MsgEvent *event, void *user)
 {
     (void)user;
     if (event->topic == TOPIC_CHASSIS_CMD) memcpy(&chassis,event->data,sizeof(chassis));
-    else memcpy(&gimbal,event->data,sizeof(gimbal));
+    else if (event->topic == TOPIC_GIMBAL_CMD) memcpy(&gimbal,event->data,sizeof(gimbal));
+    else if (event->topic == TOPIC_SHOOT_CMD) memcpy(&shooter,event->data,sizeof(shooter));
 }
 static void receive(const uint8_t *bytes, uint16_t size)
 {
@@ -105,6 +107,7 @@ int main(void)
     remote_control_init();
     MsgCenter_Subscribe(TOPIC_CHASSIS_CMD,on_command,0);
     MsgCenter_Subscribe(TOPIC_GIMBAL_CMD,on_command,0);
+    MsgCenter_Subscribe(TOPIC_SHOOT_CMD,on_command,0);
     CmdController_Task(0);
     MsgCenter_Dispatch();
     assert(!chassis.enabled && !gimbal.enabled);
@@ -304,6 +307,88 @@ int main(void)
     CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(!chassis.enabled); /* CAN disarm wins over Nav2. */
     can_armed = true;
+    /* Only the bounded, live bridge scan may replace neutral RC yaw. The
+     * configured manual rate is 1200*0.3 = 360 deg/s at normalized 1. */
+    bridge_command = (SentryBridgeCommand){
+        .control_flags = 0x01U | 0x04U | 0x20U, .scan_yaw_rate_deg_s = 60.0f};
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(fabsf(gimbal.yaw_rate - 60.0f/360.0f) < 1e-5f);
+    assert(fabsf(gimbal.yaw_speed_cap_rpm - 10.0f) < 1e-5f);
+    bridge_command.scan_yaw_rate_deg_s = -60.0f;
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(fabsf(gimbal.yaw_rate + 60.0f/360.0f) < 1e-5f);
+    bridge_command.control_flags &= (uint8_t)~0x20U;
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(fabsf(gimbal.yaw_rate) < 1e-5f); /* ordinary vision flags cannot scan */
+    assert(gimbal.yaw_speed_cap_rpm == 0.0f);
+    bridge_command.control_flags |= 0x20U;
+    remote.rc.ch[0] = -330;
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(fabsf(gimbal.yaw_rate - 0.5f) < 1e-5f);
+    assert(gimbal.yaw_speed_cap_rpm == 0.0f);
+    remote.rc.ch[0] = 0;
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+    remote.rc.ch[1] = 330;
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(fabsf(gimbal.yaw_rate) < 1e-5f); /* manual pitch suppresses scan */
+    remote.rc.ch[1] = 0;
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+    bridge_command.control_flags |= 0x02U; /* explicit stop */
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(fabsf(gimbal.yaw_rate) < 1e-5f);
+    bridge_command.control_flags &= (uint8_t)~0x02U;
+    bridge_command.scan_yaw_rate_deg_s = 61.0f; /* over the firmware cap */
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(fabsf(gimbal.yaw_rate) < 1e-5f);
+    remote.rc.s[1] = RC_SW_UP;
+    bridge_command.scan_yaw_rate_deg_s = 60.0f;
+    now_ms += 4;
+    MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+    MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(fabsf(gimbal.yaw_rate) < 1e-5f); /* spin hold owns yaw */
+    /* A dedicated Odin keepalive permits navigation with no RC. A scan
+     * keepalive permits gimbal yaw but must not turn on chassis translation. */
+    now_ms += 201;
+    bridge_command = (SentryBridgeCommand){.control_flags = 0x40U, .vx = 0.25f};
+    yaw_snapshot.feedback_timestamp_ms = now_ms;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(chassis.enabled && fabsf(chassis.vx - 0.25f) < 1e-5f);
+    assert(gimbal.enabled && !gimbal.vision_valid && gimbal.yaw_rate_memo == 0.0f);
+    assert(!shooter.friction_enabled && !shooter.feed_enabled);
+    bridge_command = (SentryBridgeCommand){
+        .control_flags = 0x01U | 0x04U | 0x20U | 0x40U,
+        .scan_yaw_rate_deg_s = 60.0f};
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled);
+    assert(fabsf(gimbal.yaw_rate - 60.0f/360.0f) < 1e-5f);
+    bridge_valid = false;
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled && !gimbal.enabled);
+    /* CAN may also re-arm with the RC absent, but only after a stable,
+     * fresh Odin keepalive that requests zero chassis velocity. */
+    can_armed = false;
+    bridge_valid = true;
+    bridge_command = (SentryBridgeCommand){.control_flags = 0x40U, .vx = 0.25f};
+    for (unsigned i = 0; i < 5; ++i) {
+        now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+        assert(!can_armed);
+    }
+    bridge_command.vx = 0.0f;
+    for (unsigned i = 0; i <= 125; ++i) {
+        now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+        if (i < 125) assert(!can_armed);
+    }
+    assert(can_armed);
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(gimbal.enabled && !chassis.enabled);
     bridge_valid = false;
     puts("nyush remote chain: PASS (original registry/decoder/daemon, source provenance, TC/IDLE, snapshot, BUSY retry without abort, command mapping, loss, error and reconnection)");
 }

@@ -25,6 +25,9 @@ static bool s_remote_seen;
 static uint32_t s_last_remote_ms;
 static bool s_neutral_seen;
 static uint32_t s_neutral_since_ms;
+#if defined(ROBOT_TYPE_infantry_standard)
+static bool s_autonomous_route_active;
+#endif
 /* 派发上下文独占；计数是已交付消息，不是UART接收帧数。 */
 static uint32_t s_rc_sequence, s_rc_dispatch_ms, s_route_sequence;
 
@@ -115,6 +118,9 @@ void CmdController_Init(void) {
     s_remote_updated = false;
     s_remote_seen = false;
     s_last_remote_ms = 0U;
+#if defined(ROBOT_TYPE_infantry_standard)
+    s_autonomous_route_active = false;
+#endif
     s_rc_sequence = s_rc_dispatch_ms = s_route_sequence = 0U;
     CommandRouter_Init(&s_router);
 
@@ -147,15 +153,35 @@ void CmdController_Task(uint32_t current_tick) {
 #else
     bool sentry_online = false;
 #endif
+#if defined(ROBOT_TYPE_infantry_standard)
+    const uint8_t odin_localization_scan = 0x20U;
+    const uint8_t odin_autonomy = 0x40U;
+    bool autonomous = sentry_online &&
+        (sentry_command.control_flags & odin_autonomy) != 0U;
+    bool nav_autonomous = autonomous &&
+        (sentry_command.control_flags & odin_localization_scan) == 0U;
+#endif
     /* Latch the pre-cycle arm state: recovery must still publish one disabled
      * cycle even if TryArm succeeds below. */
     bool outputs_armed_for_cycle = BspCan_OutputsArmed();
     if (!outputs_armed_for_cycle) {
         bool neutral = remote_online && BspCan_RecoveryReady(current_tick) &&
             switch_is_down(s_input.remote.rc.s[0]) && switch_is_down(s_input.remote.rc.s[1]);
-        for (unsigned i = 0U; i < 5U; ++i) {
-            if (s_input.remote.rc.ch[i] < -3 || s_input.remote.rc.ch[i] > 3) neutral = false;
+        if (remote_online) {
+            for (unsigned i = 0U; i < 5U; ++i) {
+                if (s_input.remote.rc.ch[i] < -3 || s_input.remote.rc.ch[i] > 3) neutral = false;
+            }
         }
+#if defined(ROBOT_TYPE_infantry_standard)
+        /* Odin can arm after the same stable CAN interval without an RC.
+         * Require a fresh dedicated bridge keepalive and zero chassis speed. */
+        if (!remote_online && autonomous && BspCan_RecoveryReady(current_tick) &&
+            isfinite(sentry_command.vx) && isfinite(sentry_command.vy) &&
+            isfinite(sentry_command.wz) &&
+            fabsf(sentry_command.vx) < 0.001f &&
+            fabsf(sentry_command.vy) < 0.001f &&
+            fabsf(sentry_command.wz) < 0.001f) neutral = true;
+#endif
         if (!neutral) s_neutral_seen = false;
         else if (!s_neutral_seen) {
             s_neutral_seen = true;
@@ -178,19 +204,42 @@ void CmdController_Task(uint32_t current_tick) {
     s_input.remote_online = outputs_armed_for_cycle &&
                             (remote_online || sentry_online);
 #else
-    /* The omni robot requires a live RC even when Nav2 has a fresh frame. */
-    s_input.remote_online = outputs_armed_for_cycle && remote_online;
+    CommandRouterInput route_input = s_input;
+    if (!remote_online && autonomous) {
+        if (!s_autonomous_route_active) CommandRouter_Init(&s_router);
+        s_autonomous_route_active = true;
+        /* Give the router neutral operator controls. Stale RC switches must
+         * not activate spin or the shooter when autonomous control takes over. */
+        memset(&route_input.remote, 0, sizeof(route_input.remote));
+        route_input.remote.rc.s[0] = RC_SW_DOWN;
+        route_input.remote.rc.s[1] = RC_SW_DOWN;
+    } else s_autonomous_route_active = false;
+    route_input.remote_online = outputs_armed_for_cycle &&
+                                (remote_online || autonomous);
 #endif
+#if defined(ROBOT_TYPE_infantry_standard)
+    RobotStatus route_status = CommandRouter_Route(&s_router,
+                                                    &route_input,
+                                                    current_tick,
+                                                    &s_output);
+#else
     RobotStatus route_status = CommandRouter_Route(&s_router,
                                                     &s_input,
                                                     current_tick,
                                                     &s_output);
+#endif
     s_input.remote_online = remote_online;
     if (route_status != ROBOT_STATUS_OK &&
         route_status != ROBOT_STATUS_NOT_READY) {
         return;
     }
     s_input.vision_updated = false;
+#if defined(ROBOT_TYPE_infantry_standard)
+    if (!remote_online) {
+        s_output.shooter = (ShootCmd){0};
+        s_router.shooter_down_seen = false;
+    }
+#endif
 
 #if defined(ROBOT_TYPE_sentry_swerve)
     if (sentry_online) {
@@ -203,16 +252,16 @@ void CmdController_Task(uint32_t current_tick) {
                                   s_output.chassis.wz,
                                   0.0f, 0.0f, 0.0f);
 #elif defined(ROBOT_TYPE_infantry_standard)
-    /* RC chassis axes take priority in all three switch positions. The
-     * gimbal axes do not interrupt autonomous chassis translation. A live RC
-     * and armed CAN are mandatory, so a lost controller never enables Nav2. */
+    /* RC chassis axes take priority while the transmitter is online. Odin
+     * may drive with a fresh dedicated keepalive when it is offline. */
     const RemoteChannels *rc = &s_input.remote.rc;
     bool manual_chassis =
         rc->ch[2] < -3 || rc->ch[2] > 3 ||
         rc->ch[3] < -3 || rc->ch[3] > 3 ||
         rc->ch[4] < -15 || rc->ch[4] > 15;
-    if (sentry_online && remote_online && BspCan_OutputsArmed() &&
-        !manual_chassis) {
+    if (sentry_online && outputs_armed_for_cycle &&
+        (remote_online || nav_autonomous) &&
+        (!remote_online || !manual_chassis)) {
         float chassis_vx = 0.0f, chassis_vy = 0.0f;
         bool command_valid = isfinite(sentry_command.vx) &&
             isfinite(sentry_command.vy) && isfinite(sentry_command.wz) &&
@@ -234,6 +283,45 @@ void CmdController_Task(uint32_t current_tick) {
             s_output.chassis.enabled = true;
         } else {
             s_output.chassis = (ChassisCmd){0};
+        }
+    }
+#endif
+
+#if defined(ROBOT_TYPE_infantry_standard)
+    /* SX robot-control scan is only a temporary localization aid. RC gimbal
+     * sticks and vision keep priority; spin/exit-brake modes keep their hold.
+     * The bridge's 250 ms SX expiry stops a stale scan automatically. */
+    const uint8_t scan_valid = 0x01U;
+    const uint8_t stop_scan = 0x02U;
+    const uint8_t scan_enabled = 0x04U;
+    if (sentry_online && (remote_online || autonomous) && outputs_armed_for_cycle &&
+        (sentry_command.control_flags &
+            (scan_valid | scan_enabled | odin_localization_scan)) ==
+            (scan_valid | scan_enabled | odin_localization_scan) &&
+        (sentry_command.control_flags & stop_scan) == 0U &&
+        !s_output.spin_mode && !s_output.gimbal.vision_valid &&
+        s_output.gimbal.yaw_rate_memo < 0.5f &&
+        (!remote_online || (s_input.remote.rc.ch[0] >= -3 && s_input.remote.rc.ch[0] <= 3)) &&
+        (!remote_online || (s_input.remote.rc.ch[1] >= -3 && s_input.remote.rc.ch[1] <= 3)) &&
+        isfinite(sentry_command.scan_yaw_rate_deg_s) &&
+        fabsf(sentry_command.scan_yaw_rate_deg_s) <= 60.0f) {
+        uint8_t ids[1];
+        if (MotorService_FindByRole(MOTOR_ROLE_GIMBAL_YAW, ids, 1U) == 1U) {
+            const MotorConfig_t *yaw = MotorService_GetConfig(ids[0]);
+            const YawControlConfig *cfg = yaw ? yaw->yaw_control : NULL;
+            if (cfg && isfinite(cfg->manual_rate_deg_s) &&
+                isfinite(cfg->manual_stick_gain) &&
+                cfg->manual_rate_deg_s > 0.0f && cfg->manual_stick_gain > 0.0f) {
+                float full_rate = cfg->manual_rate_deg_s * cfg->manual_stick_gain;
+                if (isfinite(full_rate) && full_rate >= 60.0f) {
+                    s_output.gimbal.yaw_rate =
+                        sentry_command.scan_yaw_rate_deg_s / full_rate;
+                    /* Motor RPM is degrees per second divided by six. Keep
+                     * the cap tied to the accepted localization request. */
+                    s_output.gimbal.yaw_speed_cap_rpm =
+                        fabsf(sentry_command.scan_yaw_rate_deg_s) / 6.0f;
+                }
+            }
         }
     }
 #endif

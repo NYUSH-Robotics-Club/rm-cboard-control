@@ -73,6 +73,7 @@ static bool s_feedback_stable_seen;
 static uint32_t s_feedback_stable_since_ms;
 static float s_yaw_last_speed_target_rpm;
 static bool s_yaw_speed_target_valid;
+static bool s_scan_was_active;
 
 
 static void yaw_invalidate(void);
@@ -216,6 +217,7 @@ static bool capture_startup_position(void) {
     YawReference_Seed(&s_yaw_reference, yaw->angle_raw,
                       yaw->last_feedback_time, BspTime_NowMs());
     s_yaw_mode_valid = false;
+    s_scan_was_active = false;
     YawDamping_Reset(&s_yaw_damping);
     yaw->angle_target = (float)yaw->angle_raw;
     yaw->angle_initialized = true;
@@ -450,6 +452,7 @@ static void yaw_invalidate(void) {
   s_yaw_mode_valid = false;
   s_startup_position_captured = false;
   s_yaw_last_speed_target_rpm = 0.0f;
+  s_scan_was_active = false;
   s_feedback_stable_seen = false;
 }
 
@@ -509,10 +512,26 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
 
   float rpm_limit = cfg->manual_speed_rpm;
   if (mode == YAW_CONTROL_MANUAL) {
+    bool scan_active = s_last_cmd.yaw_speed_cap_rpm > 0.0f;
+    if (s_scan_was_active && !scan_active) {
+      /* An explicit stop or expired SX command holds the measured angle,
+       * rather than chasing the last scan target after the rate becomes zero. */
+      s_yaw_reference.target_ticks = s_yaw_reference.position_ticks;
+    }
+    s_scan_was_active = scan_active;
     /* 手动目标独立积分；目标角不再被实际位置或分段阈值裁剪。 */
     YawReference_Advance(&s_yaw_reference, rate_normalized, cfg->manual_rate_deg_s,
                           mode_changed ? 0.0f : dt_s, cfg->manual_stick_gain);
+    if (scan_active) {
+      /* A bounded localization sweep must not build up an unreachable
+       * position target while the motor is speed limited. A 10 degree lead
+       * leaves room for braking when the Jetson reverses or stops the scan. */
+      float lead = 10.0f * YAW_ENCODER_TICKS / 360.0f;
+      s_yaw_reference.target_ticks = fmaxf(s_yaw_reference.position_ticks - lead,
+          fminf(s_yaw_reference.target_ticks, s_yaw_reference.position_ticks + lead));
+    }
   } else if (mode == YAW_CONTROL_VISION) {
+    s_scan_was_active = false;
     /* 一帧误差只生成一次绝对目标，等待下帧时不能随实际位置重新锚定。 */
     if (mode_changed || s_yaw_vision_frame != s_last_cmd.vision_frame) {
       s_yaw_reference.target_ticks = s_yaw_reference.position_ticks +
@@ -521,6 +540,7 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     }
     rpm_limit = cfg->vision_speed_rpm;
   } else {
+    s_scan_was_active = false;
     /* 世界航向目标只在进入spin时建立一次；持续保留误差，
      * 让云台始终追踪最初锁存的世界角度，不接受漂移后的角度重定位。 */
     float error_deg = s_last_cmd.yaw_target_memo - sensor_data->yaw_total_angle +
@@ -570,6 +590,13 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
       speed_target = fmaxf(-cfg->brake_speed_rpm,
                            fminf(speed_target, cfg->brake_speed_rpm));
     }
+  }
+  /* A localization sweep uses the normal position loop but never asks the
+   * motor speed loop to chase the manual 50 RPM limit after a pose lag. */
+  if (mode == YAW_CONTROL_MANUAL && isfinite(s_last_cmd.yaw_speed_cap_rpm) &&
+      s_last_cmd.yaw_speed_cap_rpm > 0.0f) {
+    selected_rpm_limit = fminf(selected_rpm_limit,
+                               s_last_cmd.yaw_speed_cap_rpm);
   }
   speed_target = fmaxf(-selected_rpm_limit,
                        fminf(speed_target, selected_rpm_limit));

@@ -823,6 +823,18 @@ int main(void){
  MsgCenter_Publish(TOPIC_GIMBAL_CMD,&speed_cmd,sizeof(speed_cmd));MsgCenter_Dispatch();
  assert(yaw->pid_inner.target==-10);
  gimbal_step(1990,true,true);assert(yaw->pid_inner.target==-10);
+ /* 定位扫转即使位置误差很大也只能请求2 RPM，退出后恢复原限速。 */
+ speed_cmd.yaw_speed_cap_rpm=2.0f;
+ now_ms=1992;motors[5].last_feedback_time=motors[8].last_feedback_time=now_ms;
+ MsgCenter_Publish(TOPIC_GIMBAL_CMD,&speed_cmd,sizeof(speed_cmd));MsgCenter_Dispatch();
+ assert(fabsf(yaw->pid_inner.target)<=2.0001f);
+ float scan_target_delta=fmodf(yaw->angle_target-(float)yaw->angle_raw+12288.0f,8192.0f)-4096.0f;
+ assert(fabsf(scan_target_delta)<=10.0f*8192.0f/360.0f+1.0f);
+ speed_cmd.yaw_speed_cap_rpm=0.0f;
+ speed_cmd.yaw_rate=0.0f;
+ now_ms=1993;motors[5].last_feedback_time=motors[8].last_feedback_time=now_ms;
+ MsgCenter_Publish(TOPIC_GIMBAL_CMD,&speed_cmd,sizeof(speed_cmd));MsgCenter_Dispatch();
+ assert(fabsf(yaw->angle_target-(float)yaw->angle_raw)<1e-5f);
  /* 视觉与spin按明确模式限速，返回普通模式锁当前连续位置。 */
  speed_cmd.vision_valid=true;speed_cmd.vision_yaw_err_rad=1;
  now_ms=1994;motors[5].last_feedback_time=motors[8].last_feedback_time=now_ms;
