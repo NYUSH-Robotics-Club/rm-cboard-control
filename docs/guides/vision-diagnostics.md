@@ -65,6 +65,117 @@ yaw使用连续`target_ticks`，pitch使用绝对编码目标并裁剪到车型�
 
 ## 当前可执行的检查
 
+### 离线链路仿真
+
+```bash
+sh tests/host/run_vision_link_sim.sh
+```
+
+该主机检查使用固件现有的 USB 接收函数、Seasky 解码器、旧协议桥接器、
+消息中心和命令路由器，模拟有效帧、损坏帧、20 ms 超时、无效角度和遥控失联。
+它检查到 `GimbalCmd`，不模拟相机识别、USB 硬件、云台动力学或电机运动。
+云台目标逐帧更新和限位另由 `tests/host/test_control_recovery.c` 覆盖。
+
+已导入的 `nyu-vision` 当前 `io::Gimbal` 发出 29 字节 `SP` 帧：
+模式字节加 yaw/pitch 角度、速度和加速度。`Aimer::aim()` 输出的是世界系
+瞄准角。C 板当前 USB 接收只接受 18 字节 `0xA5` Seasky 帧，其中
+pitch/yaw 是相对当前电机位置的弧度误差；C 板回传也采用 Seasky 帧，
+与 `nyu-vision` 期望的 `SP` 四元数状态帧不同。离线仿真确认 `SP` 帧
+不会产生视觉目标，因此两端尚不能直接运行同一条自瞄链。接入前须确定
+双向协议、角度坐标系和符号、时间基准、失联与开火语义，并对照实车验证。
+
+### 合成闭环自动调参
+
+```bash
+python3 tools/vision_closed_loop_tuner.py \
+  --output /tmp/vision-tuner.json --trace /tmp/vision-tuner.csv
+```
+
+该程序在合成目标轨迹和一阶虚拟云台上搜索参数，并用未参与搜索的轨迹
+逐场景复核。报告保留基线、候选和是否接受；CSV 可用于绘图。其速度、
+加速度与延迟是演示模型的假设，`gain_per_s`、`damping` 和
+`speed_limit_deg_s` **不对应** 固件配置字段。仓库目前没有匹配现行
+自瞄链的实测轨迹用于标定，因此报告只证明自动评估流程能运行，不能
+据此修改 C 板参数或宣称实车跟踪提升。
+
+### 实测数据采集
+
+为把合成仿真推进到实测闭环，需要为每次试验保留同一时间轴上的图像帧号、
+拍摄时间、曝光设置、视觉结果及其发送时间，以及 C 板接收时间、控制模式、
+双轴目标与实际位置/速度、输出饱和状态。记录时间戳的时钟来源和同步方法，
+并将相机采集、识别、通信、控制和云台响应的延迟分别测量；若评估击打，
+还需单独测量发射到命中的时间。按采集场次保存原始图像和日志，包含目标丢失、
+切换、反向与不同光照条件，避免只用连续相邻帧验证检测器。
+
+这些是后续采集要求，现有演示视频与合成模型均不含上述完整时间链。
+相机曝光、标定、坐标方向和每段延迟须以所用硬件实测确定，不能套用
+其他赛季或队伍的经验数值。
+
+### 标注数据评估与固件候选升级
+
+[`LabelRoboMaster`](https://github.com/xinyang-go/LabelRoboMaster) 是标注工具；
+其每张图片对应的 `.txt` 每行有类别编号和四个归一化角点。拿到经人工检查的
+标签，以及模型对同批图片导出的候选框 CSV 后，可以运行：
+
+```bash
+git clone --depth 1 https://github.com/xinyang-go/LabelRoboMaster.git /tmp/LabelRoboMaster
+python3 tools/vision_extract_label_frames.py nyu-vision/assets/demo/demo.avi \
+  --output build/vision-labeling/demo --interval-s 5
+python3 tools/vision_prelabel.py --images build/vision-labeling/demo \
+  --model /tmp/LabelRoboMaster/resource/model-opt.onnx \
+  --output build/vision-labeling/demo-suggestions
+```
+
+人工校对标签后，还需从**待优化的 `nyu-vision` 检测器**导出同批图片的
+原始候选框，才能调该检测器的阈值：
+
+```bash
+python3 -m pip install --target /tmp/vision-onnxruntime --no-deps onnxruntime
+PYTHONPATH=/tmp/vision-onnxruntime python3 tools/nyu_vision_export_predictions.py \
+  --images /path/to/labelled-images \
+  --config nyu-vision/configs/odin.yaml \
+  --model nyu-vision/assets/yolov5.onnx \
+  --output /tmp/nyu-detector-predictions.csv
+python3 tools/labelrobomaster_eval.py /tmp/nyu-detector-predictions.csv \
+  --labels /path/to/labelled-images --output /tmp/armor-events.csv
+python3 tools/vision_detection_tuner.py /tmp/armor-events.csv \
+  --config nyu-vision/configs/odin.yaml \
+  --report /tmp/armor-threshold.json \
+  --candidate-config /tmp/odin-candidate.yaml
+```
+
+`predictions.csv` 必须包含 `split,image,confidence,x1,y1,x2,y2,label_class`，
+坐标归一化到 0～1；无检测的图片留一行空置信度。`split` 为 `train` 或
+`holdout`，应按采集场次分组。`label_class` 使用标注工具的 0～35 编号，
+不能直接套用 `nyu-vision` 内部的颜色/名称枚举；也可改用
+`color,name,armor_type` 三列，由转换程序映射。评估程序按类别和框 IoU
+配对；候选框应从模型输出、应用当前 `min_confidence` 前导出，否则
+已过滤的检测无法恢复。程序再搜索 `min_confidence`；只有留出集 F1 提升且召回基本不下降时
+才写独立候选 YAML。模型权重不在此流程中训练。
+抽出的演示帧在 `build/vision-labeling/demo/`，初始状态均为未标注；
+演示视频只能用于熟悉标注流程，不能作为独立的实车留出集。
+预标注只生成 `.suggested.txt` 和空 `split` 的预测 CSV，须人工逐图核对
+并另存同名 `.txt` 真值、按采集场次填写划分后才可评估。
+`vision_prelabel.py` 使用的是标注工具自带模型；其预测不能用来调
+`nyu-vision` 检测器的置信度阈值。
+ONNX 主机回放已可导出候选框，但 `odin.yaml` 实车路径使用 TensorRT
+并可回退 OpenVINO XML，且还包含传统角点修正；使用结果前须核对模型
+版本、后端输出和实车图像域。独立测试集不能来自同一段演示视频。
+标注工具对无目标图片会删除同名 `.txt`；只有确认所有图片均已人工复核时，
+才可在匹配脚本中加 `--missing-empty` 将缺失标签视为负样本。
+
+`tools/vision_firmware_promote.py` 只接受步兵车型、当前配置哈希匹配、
+有安全边界的 `vision_speed_rpm` 候选，以及至少两个场景、每场景三个
+成对实测回合的基线/候选试验。默认仅输出检查报告；加 `--apply` 才修改
+上层车型配置，并运行主机回归和步兵 ARM 构建，失败则恢复源文件。
+它不烧录板卡。合成仿真报告和旧固件日志不能作为这些实测证据。
+升级提案 JSON 需含 `source="measured_board_ab"`、
+`robot_type="infantry_standard"`、`config_sha256`、`candidate_rpm`、
+`bounds_rpm`、`trials_csv`、`trials_sha256`；试验 CSV 列为
+`variant,scenario,session,yaw_mae_deg,yaw_peak_deg,saturation_fraction,remote_loss_safe,elf_sha256`。
+先运行 `python3 tools/vision_firmware_promote.py proposal.json` 查看结果，
+通过后可用 `--apply` 升级配置。
+
 ### 1. 检查原始 USB 数据
 
 - 确认 Jetson/上位机发送的帧长为 18 字节；
