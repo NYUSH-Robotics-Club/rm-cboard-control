@@ -64,6 +64,7 @@ static void command_axis(uint8_t id, int16_t command) {
 #define YAW_REVERSE_INTEGRAL_FACTOR (0.20f)
 #define YAW_TARGET_ZERO_EPS_RPM (0.5f)
 #define YAW_STOP_SPEED_EPS_RPM (1.5f)
+#define YAW_MANUAL_STOP_SETTLE_MS (20U)
 // Static state for application
 static GimbalCmd s_last_cmd;
 static SensorData s_last_sensor;
@@ -74,6 +75,16 @@ static uint32_t s_feedback_stable_since_ms;
 static float s_yaw_last_speed_target_rpm;
 static bool s_yaw_speed_target_valid;
 static bool s_scan_was_active;
+static bool s_yaw_manual_stick_active;
+static bool s_yaw_manual_braking;
+static bool s_yaw_manual_low_speed_seen;
+static uint32_t s_yaw_manual_low_speed_since_ms;
+
+static void yaw_reset_manual_stop(void) {
+  s_yaw_manual_stick_active = false;
+  s_yaw_manual_braking = false;
+  s_yaw_manual_low_speed_seen = false;
+}
 
 
 static void yaw_invalidate(void);
@@ -218,6 +229,7 @@ static bool capture_startup_position(void) {
                       yaw->last_feedback_time, BspTime_NowMs());
     s_yaw_mode_valid = false;
     s_scan_was_active = false;
+    yaw_reset_manual_stop();
     YawDamping_Reset(&s_yaw_damping);
     yaw->angle_target = (float)yaw->angle_raw;
     yaw->angle_initialized = true;
@@ -430,6 +442,8 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
 static bool yaw_config_valid(const YawControlConfig *cfg) {
   return cfg && YawDamping_ConfigValid(cfg) && isfinite(cfg->manual_rate_deg_s) && cfg->manual_rate_deg_s > 0.0f &&
       isfinite(cfg->manual_speed_rpm) && cfg->manual_speed_rpm > 0.0f &&
+      isfinite(cfg->manual_stop_speed_rpm) && cfg->manual_stop_speed_rpm >= 0.0f &&
+      cfg->manual_stop_speed_rpm <= cfg->manual_speed_rpm &&
       isfinite(cfg->vision_speed_rpm) && cfg->vision_speed_rpm > 0.0f &&
       isfinite(cfg->far_damping_gain) && cfg->far_damping_gain >= 0.0f &&
       isfinite(cfg->approach_damping_gain) && cfg->approach_damping_gain >= 0.0f &&
@@ -453,6 +467,7 @@ static void yaw_invalidate(void) {
   s_startup_position_captured = false;
   s_yaw_last_speed_target_rpm = 0.0f;
   s_scan_was_active = false;
+  yaw_reset_manual_stop();
   s_feedback_stable_seen = false;
 }
 
@@ -493,6 +508,7 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
       sensor_data->g_gz * 30.0f / (float)M_PI : (float)yaw->speed_rpm;
   bool mode_changed = !s_yaw_mode_valid || mode != s_yaw_mode;
   if (mode_changed) {
+    yaw_reset_manual_stop();
     YawDamping_Reset(&s_yaw_damping);
     s_yaw_reference.target_ticks = s_yaw_reference.position_ticks;
     PID_Reset(outer_pid);
@@ -513,12 +529,60 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
   float rpm_limit = cfg->manual_speed_rpm;
   if (mode == YAW_CONTROL_MANUAL) {
     bool scan_active = s_last_cmd.yaw_speed_cap_rpm > 0.0f;
+    bool scan_ended = s_scan_was_active && !scan_active;
     if (s_scan_was_active && !scan_active) {
       /* An explicit stop or expired SX command holds the measured angle,
        * rather than chasing the last scan target after the rate becomes zero. */
       s_yaw_reference.target_ticks = s_yaw_reference.position_ticks;
     }
     s_scan_was_active = scan_active;
+    bool manual_stop_enabled = !cfg->speed_loop_only &&
+        cfg->manual_stop_speed_rpm > 0.0f && !scan_active && !scan_ended;
+    if (!manual_stop_enabled) yaw_reset_manual_stop();
+    if (manual_stop_enabled) {
+      if (rate_normalized != 0.0f) {
+        if (s_yaw_manual_braking) {
+          /* A new stick command takes over from measured position, never the
+           * pre-release target that may be far ahead of the motor. */
+          s_yaw_reference.target_ticks = s_yaw_reference.position_ticks;
+          PID_Reset(outer_pid);
+          YawDamping_Reset(&s_yaw_damping);
+          s_yaw_manual_braking = false;
+          s_yaw_manual_low_speed_seen = false;
+        }
+        s_yaw_manual_stick_active = true;
+      } else {
+        if (s_yaw_manual_stick_active) {
+          /* The integrated target can lead the motor by many degrees. On
+           * release, command zero RPM before latching a new hold position. */
+          s_yaw_reference.target_ticks = s_yaw_reference.position_ticks;
+          PID_Reset(outer_pid);
+          YawDamping_Reset(&s_yaw_damping);
+          s_yaw_manual_braking = true;
+          s_yaw_manual_low_speed_seen = false;
+        }
+        s_yaw_manual_stick_active = false;
+        if (s_yaw_manual_braking) {
+          uint32_t now_ms = BspTime_NowMs();
+          if (fabsf(speed_feedback) <= cfg->manual_stop_speed_rpm) {
+            if (!s_yaw_manual_low_speed_seen) {
+              s_yaw_manual_low_speed_since_ms = now_ms;
+              s_yaw_manual_low_speed_seen = true;
+            } else if ((uint32_t)(now_ms - s_yaw_manual_low_speed_since_ms) >=
+                       YAW_MANUAL_STOP_SETTLE_MS) {
+              s_yaw_reference.target_ticks = s_yaw_reference.position_ticks;
+              PID_Reset(outer_pid);
+              YawDamping_Reset(&s_yaw_damping);
+              yaw_clear_speed_integral(inner_pid, speed_feedback);
+              s_yaw_manual_braking = false;
+              s_yaw_manual_low_speed_seen = false;
+            }
+          } else {
+            s_yaw_manual_low_speed_seen = false;
+          }
+        }
+      }
+    }
     /* 手动目标独立积分；目标角不再被实际位置或分段阈值裁剪。 */
     YawReference_Advance(&s_yaw_reference, rate_normalized, cfg->manual_rate_deg_s,
                           mode_changed ? 0.0f : dt_s, cfg->manual_stick_gain);
@@ -558,7 +622,10 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
   float angle_error = s_yaw_reference.target_ticks - s_yaw_reference.position_ticks;
   if (fabsf(angle_error) < 0.02f) angle_error = 0.0f;
   float speed_target;
-  if (cfg->speed_loop_only) {
+  if (s_yaw_manual_braking) {
+    /* The position loop is intentionally bypassed until the rotor settles. */
+    speed_target = 0.0f;
+  } else if (cfg->speed_loop_only) {
     /* 暂时旁路下面的位置PID；回中目标是0 RPM，不是零电流或锁位置。 */
     speed_target = fmaxf(-1.0f, fminf(rate_normalized, 1.0f)) *
                    cfg->manual_rate_deg_s / 6.0f;
@@ -566,7 +633,7 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     speed_target = PID_CalculateDivided(outer_pid, 0.0f, -angle_error,
                                         PID_YAW_OUTER_DIVIDER);
   }
-  if (!cfg->speed_loop_only) {
+  if (!cfg->speed_loop_only && !s_yaw_manual_braking) {
     /* 控制算法共用，目标与速度必须处于同一参考系：SPIN使用世界航向
      * 和IMU RPM。不能把随底盘转动的等效编码目标误判为主动换向。 */
     float damping_target = mode == YAW_CONTROL_SPIN
@@ -578,11 +645,11 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
   } else {
     YawDamping_Reset(&s_yaw_damping);
   }
-  bool reverse_braking = !cfg->speed_loop_only &&
+  bool reverse_braking = !cfg->speed_loop_only && !s_yaw_manual_braking &&
                          fabsf(speed_feedback) > YAW_STOP_SPEED_EPS_RPM &&
                          speed_target * speed_feedback < 0.0f;
   float selected_rpm_limit = rpm_limit;
-  if (!cfg->speed_loop_only) {
+  if (!cfg->speed_loop_only && !s_yaw_manual_braking) {
     rpm_limit = yaw_segmented_speed_limit(cfg, rpm_limit, angle_error);
     selected_rpm_limit = rpm_limit;
     if (reverse_braking) {
@@ -886,6 +953,7 @@ static void process_gimbal_cmd(const MsgEvent *ev, void *user) {
       pitch_reset_control();
       s_yaw_reference.valid = false;
       s_yaw_mode_valid = false;
+      yaw_reset_manual_stop();
       YawDamping_Reset(&s_yaw_damping);
       s_coupling_history_valid = false;
       command_axis(s_pitch_motor_id, 0);
@@ -937,7 +1005,8 @@ static GimbalMonitorAxis monitor_axis(uint8_t id, unsigned index, bool active) {
   bool yaw = index == 0U;
   bool speed_only = yaw && motor->config && motor->config->yaw_control &&
                     motor->config->yaw_control->speed_loop_only;
-  if (active && !speed_only) axis.flags |= GIMBAL_MONITOR_POSITION_ACTIVE;
+  if (active && !speed_only && !(yaw && s_yaw_manual_braking))
+    axis.flags |= GIMBAL_MONITOR_POSITION_ACTIVE;
   if (yaw && active && s_yaw_mode == YAW_CONTROL_SPIN)
     axis.flags |= GIMBAL_MONITOR_SPEED_IMU;
   axis.feedback_ms = motor->last_feedback_time;

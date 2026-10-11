@@ -21,6 +21,7 @@ static const YawControlConfig s_yaw_control = {
     .manual_rate_deg_s = 615.234375f,
     .manual_stick_gain = 1.0f,
     .manual_speed_rpm = 300.0f,
+    .manual_stop_speed_rpm = 0.0f,
     .vision_speed_rpm = 500.0f,
     .speed_loop_only = false, /* 哨兵继续执行位置/速度串级。 */
     .near_error_deg = 10.0f,
