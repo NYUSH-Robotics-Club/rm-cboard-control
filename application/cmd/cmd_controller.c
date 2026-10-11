@@ -156,10 +156,14 @@ void CmdController_Task(uint32_t current_tick) {
 #if defined(ROBOT_TYPE_infantry_standard)
     const uint8_t odin_localization_scan = 0x20U;
     const uint8_t odin_autonomy = 0x40U;
+    const uint8_t odin_nav_gimbal = 0x80U;
     bool autonomous = sentry_online &&
         (sentry_command.control_flags & odin_autonomy) != 0U;
+    /* Nav2 yaw and translation share a fresh command; localization-only
+     * scanning still cannot drive the chassis with no RC. */
     bool nav_autonomous = autonomous &&
-        (sentry_command.control_flags & odin_localization_scan) == 0U;
+        ((sentry_command.control_flags & odin_localization_scan) == 0U ||
+         (sentry_command.control_flags & odin_nav_gimbal) != 0U);
 #endif
     /* Latch the pre-cycle arm state: recovery must still publish one disabled
      * cycle even if TryArm succeeds below. */
@@ -304,7 +308,7 @@ void CmdController_Task(uint32_t current_tick) {
         (!remote_online || (s_input.remote.rc.ch[0] >= -3 && s_input.remote.rc.ch[0] <= 3)) &&
         (!remote_online || (s_input.remote.rc.ch[1] >= -3 && s_input.remote.rc.ch[1] <= 3)) &&
         isfinite(sentry_command.scan_yaw_rate_deg_s) &&
-        fabsf(sentry_command.scan_yaw_rate_deg_s) <= 60.0f) {
+        fabsf(sentry_command.scan_yaw_rate_deg_s) <= 120.0f) {
         uint8_t ids[1];
         if (MotorService_FindByRole(MOTOR_ROLE_GIMBAL_YAW, ids, 1U) == 1U) {
             const MotorConfig_t *yaw = MotorService_GetConfig(ids[0]);
@@ -313,11 +317,11 @@ void CmdController_Task(uint32_t current_tick) {
                 isfinite(cfg->manual_stick_gain) &&
                 cfg->manual_rate_deg_s > 0.0f && cfg->manual_stick_gain > 0.0f) {
                 float full_rate = cfg->manual_rate_deg_s * cfg->manual_stick_gain;
-                if (isfinite(full_rate) && full_rate >= 60.0f) {
+                if (isfinite(full_rate) && full_rate >= 120.0f) {
                     s_output.gimbal.yaw_rate =
                         sentry_command.scan_yaw_rate_deg_s / full_rate;
                     /* Motor RPM is degrees per second divided by six. Keep
-                     * the cap tied to the accepted localization request. */
+                     * the cap tied to the accepted yaw-rate request. */
                     s_output.gimbal.yaw_speed_cap_rpm =
                         fabsf(sentry_command.scan_yaw_rate_deg_s) / 6.0f;
                 }

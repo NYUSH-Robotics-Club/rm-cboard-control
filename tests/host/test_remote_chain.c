@@ -317,6 +317,12 @@ int main(void)
     bridge_command.scan_yaw_rate_deg_s = -60.0f;
     now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(fabsf(gimbal.yaw_rate + 60.0f/360.0f) < 1e-5f);
+    bridge_command.control_flags |= 0x80U;
+    bridge_command.scan_yaw_rate_deg_s = 120.0f;
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(fabsf(gimbal.yaw_rate - 120.0f/360.0f) < 1e-5f);
+    assert(fabsf(gimbal.yaw_speed_cap_rpm - 20.0f) < 1e-5f);
+    bridge_command.control_flags &= (uint8_t)~0x80U;
     bridge_command.control_flags &= (uint8_t)~0x20U;
     now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(fabsf(gimbal.yaw_rate) < 1e-5f); /* ordinary vision flags cannot scan */
@@ -345,7 +351,7 @@ int main(void)
     now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(fabsf(gimbal.yaw_rate) < 1e-5f);
     bridge_command.control_flags &= (uint8_t)~0x02U;
-    bridge_command.scan_yaw_rate_deg_s = 61.0f; /* over the firmware cap */
+    bridge_command.scan_yaw_rate_deg_s = 121.0f; /* over the firmware cap */
     now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(fabsf(gimbal.yaw_rate) < 1e-5f);
     remote.rc.s[1] = RC_SW_UP;
@@ -369,6 +375,16 @@ int main(void)
     now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(!chassis.enabled);
     assert(fabsf(gimbal.yaw_rate - 60.0f/360.0f) < 1e-5f);
+    /* Nav2 may request both translation and gimbal yaw with a distinct flag. */
+    bridge_command.control_flags |= 0x80U;
+    bridge_command.vx = 0.25f;
+    bridge_command.scan_yaw_rate_deg_s = 120.0f;
+    yaw_snapshot.feedback_timestamp_ms = now_ms + 4;
+    now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(chassis.enabled && fabsf(chassis.vx - 0.25f) < 1e-5f);
+    assert(fabsf(chassis.wz) < 1e-5f);
+    assert(fabsf(gimbal.yaw_rate - 120.0f/360.0f) < 1e-5f);
+    assert(fabsf(gimbal.yaw_speed_cap_rpm - 20.0f) < 1e-5f);
     bridge_valid = false;
     now_ms += 4; CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(!chassis.enabled && !gimbal.enabled);

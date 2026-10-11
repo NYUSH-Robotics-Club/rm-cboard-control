@@ -523,10 +523,11 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
     YawReference_Advance(&s_yaw_reference, rate_normalized, cfg->manual_rate_deg_s,
                           mode_changed ? 0.0f : dt_s, cfg->manual_stick_gain);
     if (scan_active) {
-      /* A bounded localization sweep must not build up an unreachable
-       * position target while the motor is speed limited. A 10 degree lead
-       * leaves room for braking when the Jetson reverses or stops the scan. */
-      float lead = 10.0f * YAW_ENCODER_TICKS / 360.0f;
+      /* Bound the target lead to about one sixth of a second at the
+       * requested speed. Keep 10 degrees for slower localization scans;
+       * 120 deg/s needs 20 degrees so the position loop can ask for 20 RPM. */
+      float lead_deg = fmaxf(10.0f, s_last_cmd.yaw_speed_cap_rpm);
+      float lead = lead_deg * YAW_ENCODER_TICKS / 360.0f;
       s_yaw_reference.target_ticks = fmaxf(s_yaw_reference.position_ticks - lead,
           fminf(s_yaw_reference.target_ticks, s_yaw_reference.position_ticks + lead));
     }
@@ -591,8 +592,8 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
                            fminf(speed_target, cfg->brake_speed_rpm));
     }
   }
-  /* A localization sweep uses the normal position loop but never asks the
-   * motor speed loop to chase the manual 50 RPM limit after a pose lag. */
+  /* Autonomous yaw uses the normal position loop with a request-specific
+   * speed cap, avoiding the manual 50 RPM target after a pose lag. */
   if (mode == YAW_CONTROL_MANUAL && isfinite(s_last_cmd.yaw_speed_cap_rpm) &&
       s_last_cmd.yaw_speed_cap_rpm > 0.0f) {
     selected_rpm_limit = fminf(selected_rpm_limit,
