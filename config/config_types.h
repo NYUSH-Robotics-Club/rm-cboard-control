@@ -127,6 +127,7 @@ typedef struct {
     float manual_rate_deg_s;       /* 满杆目标角速度；速度调试时除以6得到RPM。 */
     float manual_stick_gain;       /* 手动摇杆输入放大倍数；1.0表示不放大。 */
     float manual_speed_rpm;        /* 普通推杆、回中和小陀螺稳头共用的速度上限。 */
+    float manual_stop_speed_rpm;   /* 回中后低于此实际速度并持续停稳再锁角；0关闭快速停车。 */
     float vision_speed_rpm;        /* 明确进入视觉模式时的速度上限。 */
     bool speed_loop_only;          /* true：暂时旁路位置环，只调电机RPM速度环。 */
     float near_error_deg;          /* 进入近目标/低速区的位置误差阈值，单位度。 */

@@ -29,6 +29,7 @@ static const YawControlConfig s_yaw_control = {
     .manual_rate_deg_s = 1200.0f,
     .manual_stick_gain = 0.3f,
     .manual_speed_rpm = 50.0f,
+    .manual_stop_speed_rpm = 1.5f,
     .vision_speed_rpm = 50.0f,
     .speed_loop_only = false, /* false：执行位置/速度串级闭环。 */
     .brake_speed_rpm = 40.0f,/*全阶段反向制动上限，单位RPM*/

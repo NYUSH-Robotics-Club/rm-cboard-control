@@ -631,6 +631,67 @@ static void test_spin_shared_control(YawControlConfig *cfg) {
  puts("spin shared control: PASS (motor PID, segmented limit, IMU damping, reverse cap, invalid feedback)");
 }
 
+static void test_manual_yaw_quick_stop(YawControlConfig *cfg) {
+ YawControlConfig saved=*cfg;
+ cfg->speed_loop_only=false;
+ cfg->manual_rate_deg_s=1200;
+ cfg->manual_stick_gain=.3f;
+ cfg->manual_speed_rpm=50;
+ cfg->manual_stop_speed_rpm=1.5f;
+ MotorContext_t *yaw=&motors[5];
+ yaw->angle_raw=4000; yaw->speed_rpm=0;
+ motors[8].angle_raw=1971;
+ gimbal_step(now_ms+4,false,true);
+ gimbal_step(now_ms+4,true,true);
+ gimbal_step(now_ms+100,true,true);
+ PID_Init(&yaw->pid_outer,.1f,0,0,2200,0);
+ PID_Init(&yaw->pid_inner,200,0,0,12000,0);
+ GimbalCmd moving={.enabled=true,.yaw_rate=-1};
+ for(unsigned i=0;i<100;i++) {
+   yaw->angle_raw=(uint16_t)((yaw->angle_raw+8192U-27U)%8192U);
+   yaw->speed_rpm=-50;
+   feedforward_step(moving);
+ }
+ /* Full stick moves the reference faster than a 50 RPM rotor can follow. */
+ assert(yaw->angle_target < (float)yaw->angle_raw-500.0f);
+ GimbalCmd released={.enabled=true};
+ feedforward_step(released);
+ float release_position=(float)yaw->angle_raw;
+ assert(yaw->angle_target==release_position);
+ assert(yaw->pid_inner.target==0.0f && outputs[5]>0);
+ assert(!(g_gimbal_monitor.yaw.flags&GIMBAL_MONITOR_POSITION_ACTIVE));
+ for(unsigned i=0;i<4;i++) {
+   yaw->angle_raw-=20;
+   yaw->speed_rpm=-30;
+   feedforward_step(released);
+   assert(yaw->angle_target==release_position);
+   assert(yaw->pid_inner.target==0.0f);
+ }
+ yaw->speed_rpm=0;
+ for(unsigned i=0;i<5;i++) {
+   feedforward_step(released);
+   assert(!(g_gimbal_monitor.yaw.flags&GIMBAL_MONITOR_POSITION_ACTIVE));
+ }
+ feedforward_step(released);
+ assert(yaw->angle_target==(float)yaw->angle_raw);
+ assert(g_gimbal_monitor.yaw.flags&GIMBAL_MONITOR_POSITION_ACTIVE);
+ /* A second command during braking must start from the live position. */
+ moving.yaw_rate=1;
+ feedforward_step(moving);
+ yaw->speed_rpm=30;
+ feedforward_step(released);
+ assert(yaw->pid_inner.target==0.0f);
+ assert(!(g_gimbal_monitor.yaw.flags&GIMBAL_MONITOR_POSITION_ACTIVE));
+ float resume_position=(float)yaw->angle_raw;
+ moving.yaw_rate=-1;
+ feedforward_step(moving);
+ assert(fabsf(yaw->angle_target-(resume_position-32.768f))<.02f);
+ assert(g_gimbal_monitor.yaw.flags&GIMBAL_MONITOR_POSITION_ACTIVE);
+ gimbal_step(now_ms+4,false,true);
+ *cfg=saved;
+ puts("manual yaw quick stop: PASS (release braking, settled hold, fresh re-command)");
+}
+
 int main(void){
  MsgEvent queue[32];
  MsgCenter_Init(queue,32);
@@ -646,6 +707,7 @@ int main(void){
  MotorConfig_t yaw_config=*motors[5].config;
  YawControlConfig yaw_control=*yaw_config.yaw_control;
  yaw_control.speed_loop_only=false;
+ yaw_control.manual_stop_speed_rpm=0; /* Existing legacy hold cases; quick stop is tested separately. */
  yaw_control.manual_rate_deg_s=30; /* 固定测试输入，不依赖实车推杆灵敏度调参。 */
  yaw_config.yaw_control=&yaw_control;
  motors[5].config=&yaw_config;
@@ -862,6 +924,7 @@ int main(void){
  test_pitch_output_and_load();
  test_vision_targets(&yaw_control);
  test_spin_shared_control(&yaw_control);
+ test_manual_yaw_quick_stop(&yaw_control);
  test_shooter_interlock();
  test_feed_stall_recovery();
  test_feed_custom_threshold();
