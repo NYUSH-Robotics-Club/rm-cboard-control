@@ -18,8 +18,22 @@ static uint32_t now_ms;
 static MotorContext_t motors[16];
 static int16_t outputs[16];
 static float setpoints[16];
+static unsigned motor_command_count;
 static bool can_armed = true;
 static RobotStatus monitor_command_status = ROBOT_STATUS_OK;
+/* Keep the shooter controller regression on a dedicated equipped fixture. */
+static const MotorConfig_t shooter_motors[] = {
+ {.motor_id=9,.role=MOTOR_ROLE_SHOOTER_FEED,
+  .pid_outer={10.0f,1.0f,0.0f,5000.0f,5000.0f}},
+ {.motor_id=6,.role=MOTOR_ROLE_SHOOTER_FRICTION,
+  .pid_outer={7.0f,0.8f,0.08f,12000.0f,20000.0f}},
+ {.motor_id=7,.role=MOTOR_ROLE_SHOOTER_FRICTION,
+  .pid_outer={7.0f,0.8f,0.08f,12000.0f,20000.0f}}
+};
+static const RobotConfig_t shooter_robot = {
+ .motor_configs=shooter_motors,.shooter_motor_count=3,.total_motor_count=3
+};
+static const RobotConfig_t *active_robot = &g_robot_config_infantry_standard;
 MotorCommandUnit MotorService_GetCommandUnit(uint8_t id) {
  return id == 5 ? MOTOR_COMMAND_UNIT_CURRENT_COUNTS : MOTOR_COMMAND_UNIT_VOLTAGE_COUNTS;
 }
@@ -32,13 +46,19 @@ void Logger_Log(LogTag_t t,LogLevel_t l,const char *f,...){(void)t;(void)l;(void
 void Logger_CSV(LogTag_t t,const char *f,...){(void)t;(void)f;}
 void USB_CDC_Printf(const char *f,...){(void)f;}
 const MotorConfig_t *MotorService_GetConfig(uint8_t id){
- const RobotConfig_t *r=&g_robot_config_infantry_standard;
+ const RobotConfig_t *r=active_robot;
  for(uint8_t i=0;i<r->total_motor_count;i++)if(r->motor_configs[i].motor_id==id)return &r->motor_configs[i];
+ /* Gimbal callbacks continue during the equipped shooter fixture. */
+ if(r==&shooter_robot&&(id==5||id==8)){
+  r=&g_robot_config_infantry_standard;
+  for(uint8_t i=0;i<r->total_motor_count;i++)if(r->motor_configs[i].motor_id==id)return &r->motor_configs[i];
+ }
  return NULL;
 }
 uint8_t MotorService_FindByRole(MotorRole_e role,uint8_t *ids,uint8_t cap){
  uint8_t count=0;
- for(uint8_t id=1;id<10&&count<cap;id++)if(MotorService_GetConfig(id)->role==role)ids[count++]=id;
+ for(uint8_t i=0;i<active_robot->total_motor_count&&count<cap;i++)
+  if(active_robot->motor_configs[i].role==role)ids[count++]=active_robot->motor_configs[i].motor_id;
  return count;
 }
 MotorContext_t *MotorDriver_GetContext(uint8_t id){return id<16?&motors[id]:NULL;}
@@ -46,7 +66,7 @@ MotorContext_t *MotorDriver_GetContext(uint8_t id){return id<16?&motors[id]:NULL
 int16_t MotorDriver_GetCommandLimit(uint8_t id){
  return id==5?MotorService_GetConfig(id)->protocol.dji.command_limit:25000;
 }
-RobotStatus MotorService_CommandCurrent(uint8_t id,int16_t value){assert(id<16);outputs[id]=value;return monitor_command_status;}
+RobotStatus MotorService_CommandCurrent(uint8_t id,int16_t value){assert(id<16);motor_command_count++;outputs[id]=value;return monitor_command_status;}
 RobotStatus MotorService_CommandConfigured(uint8_t id,float target,int16_t value){setpoints[id]=target;return MotorService_CommandCurrent(id,value);}
 /* 三台反馈联锁走真实消息回调；依次模拟每台断线和首帧缺失。 */
 static void shooter_feedback(uint8_t id, uint32_t tick) {
@@ -70,6 +90,19 @@ static void assert_shooter_stopped(void) {
   assert(pids[i]->error[0] == 0 && pids[i]->error[1] == 0 && pids[i]->error[2] == 0);
  }
  assert(!ShooterController_IsRunning(controller));
+}
+static void test_unconfigured_shooter(void) {
+ MsgEvent queue[32];
+ uint8_t id;
+ assert(active_robot == &g_robot_config_infantry_standard);
+ assert(MotorService_FindByRole(MOTOR_ROLE_SHOOTER_FEED, &id, 1)==0);
+ assert(MotorService_FindByRole(MOTOR_ROLE_SHOOTER_FRICTION, &id, 1)==0);
+ MsgCenter_Init(queue,32); ShooterApp_Init();
+ motor_command_count=0;
+ shooter_command();
+ assert(motor_command_count==0);
+ assert_shooter_stopped();
+ assert(ShooterApp_GetController()->feedback_fault);
 }
 static void test_shooter_interlock(void) {
  MsgEvent queue[32];
@@ -711,7 +744,9 @@ int main(void){
  yaw_control.manual_rate_deg_s=30; /* 固定测试输入，不依赖实车推杆灵敏度调参。 */
  yaw_config.yaw_control=&yaw_control;
  motors[5].config=&yaw_config;
- GimbalApp_Init(); ShooterApp_Init();
+ GimbalApp_Init();
+ active_robot=&shooter_robot;
+ ShooterApp_Init();
  gimbal_step(100,true,true);assert(outputs[5]==0&&outputs[8]==0);
  assert(g_gimbal_monitor.magic == 0x474D4F4E && g_gimbal_monitor.version == GIMBAL_MONITOR_VERSION);
  assert(g_gimbal_monitor.size_bytes == sizeof(GimbalMonitorSnapshot));
@@ -766,6 +801,7 @@ int main(void){
  can_armed=true;now_ms=601;
  MsgCenter_Publish(TOPIC_SHOOT_CMD,&shoot,sizeof(shoot));MsgCenter_Dispatch();
  assert(outputs[6]==0&&outputs[7]==0); /* Stale feedback must never be used to brake. */
+ active_robot=&g_robot_config_infantry_standard;
  /* 固定测试增益，验证双环出力和失联归零，不把用户调参当作稳定性测试模型。 */
  MotorContext_t *yaw=&motors[5];
  PID_Init(&yaw->pid_outer,1,0,0,600,0);
@@ -937,6 +973,8 @@ int main(void){
  test_vision_targets(&yaw_control);
  test_spin_shared_control(&yaw_control);
  test_manual_yaw_quick_stop(&yaw_control);
+ test_unconfigured_shooter();
+ active_robot=&shooter_robot;
  test_shooter_interlock();
  test_feed_stall_recovery();
  test_feed_custom_threshold();
