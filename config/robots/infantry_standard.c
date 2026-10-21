@@ -74,13 +74,13 @@ static const PitchControlConfig s_pitch_control = {
  *
  * - 4x M3508 chassis motors (omni wheels)
  * - 2x GM6020 gimbal motors (pitch + yaw)
- * - 3x M3508 shooter motors (turntable + 2x friction wheels)
+ * - No shooter motors: the feed and both friction wheels are removed.
  */
 
 /*
  * motor_id 是全局唯一的软件编号；重复编号会使电机服务拒绝初始化。
  * 硬件 ID 由电机/电调设置，下面的 CAN 地址和槽位与它对应，不会修改硬件 ID。
- * CAN1：底盘硬件 ID 1~4、Yaw ID 5；CAN2：左右摩擦轮 ID 1/2、拨弹 ID 3、Pitch ID 4。
+ * CAN1：底盘硬件 ID 1~4、Yaw ID 5；CAN2：Pitch ID 4。
  * tx_slot 从 0 开始，每槽占控制报文的两个字节，高字节在前。
  */
 static const MotorConfig_t g_motor_configs_infantry_standard[] = {
@@ -153,60 +153,6 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .direction = -1,
      .limits.m3508 = {.speed_limit = 10000.0f},
      .pid_outer = {15.0f, 0.0f, 0.0f, 12000.0f, 3000.0f},
-     .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
-
-    // ========== SHOOTER MOTORS (3x M3508) ==========
-    // 拨弹：CAN2 硬件 ID 3，软件编号 9。
-    {.motor_id = 9, .offline_alarm_id = 3,
-     .vendor = MOTOR_VENDOR_DJI,
-     .type = MOTOR_TYPE_M3508,
-     .role = MOTOR_ROLE_SHOOTER_FEED,
-     .control_mode = MOTOR_CONTROL_APPLICATION,
-     .can_channel = CAN_CHANNEL_2,
-     .can_rx_id = 0x203,
-     .can_tx_id = 0x200,
-     .tx_command_ttl_ms = 20U,
-     .tx_abort_timeout_ms = 20U,
-     .tx_slot = 2,
-     .direction = +1,
-     .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer =
-         {10.0f, 1.0f, 0.0f, 5000.0f,
-          5000.0f}, // Reference infantry loader speed PID
-     .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
-
-    // 左摩擦轮：CAN2 硬件 ID 1，软件编号 6。
-    {.motor_id = 6, .offline_alarm_id = 1,
-     .vendor = MOTOR_VENDOR_DJI,
-     .type = MOTOR_TYPE_M3508,
-     .role = MOTOR_ROLE_SHOOTER_FRICTION,
-     .control_mode = MOTOR_CONTROL_APPLICATION,
-     .can_channel = CAN_CHANNEL_2,
-     .can_rx_id = 0x201,
-     .can_tx_id = 0x200,
-     .tx_command_ttl_ms = 20U,
-     .tx_abort_timeout_ms = 20U,
-     .tx_slot = 0,
-     .direction = +1,
-     .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {7.0f, 0.8f, 0.08f, 12000.0f, 20000.0f},
-     .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
-
-    // 右摩擦轮：CAN2 硬件 ID 2，软件编号 7。
-    {.motor_id = 7, .offline_alarm_id = 2,
-     .vendor = MOTOR_VENDOR_DJI,
-     .type = MOTOR_TYPE_M3508,
-     .role = MOTOR_ROLE_SHOOTER_FRICTION,
-     .control_mode = MOTOR_CONTROL_APPLICATION,
-     .can_channel = CAN_CHANNEL_2,
-     .can_rx_id = 0x202,
-     .can_tx_id = 0x200,
-     .tx_command_ttl_ms = 20U,
-     .tx_abort_timeout_ms = 20U,
-     .tx_slot = 1,
-     .direction = +1,
-     .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {7.0f, 0.8f, 0.08f, 12000.0f, 20000.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // ========== GIMBAL MOTORS (2x GM6020) ==========
@@ -305,8 +251,8 @@ const RobotConfig_t g_robot_config_infantry_standard = {
     .chassis_follow = &s_chassis_follow,
     .chassis_motor_count = 4,
     .gimbal_motor_count = 2,
-    .shooter_motor_count = 3,
+    .shooter_motor_count = 0,
     .motor_configs = g_motor_configs_infantry_standard,
-    .total_motor_count = 9,
+    .total_motor_count = 6,
     .enable_imu_calibration = 1 // Infantry needs IMU calibration
 };
