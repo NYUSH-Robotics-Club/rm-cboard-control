@@ -226,6 +226,7 @@ done
 "$test_build/test_motor_protocols"
 "$test_build/test_command_router"
 CC="$cc" sh "$repo_root/tests/host/run_vision_link_sim.sh"
+python3 "$repo_root/tests/host/test_vision_cboard_link.py"
 "$test_build/test_motor_adapters"
 "$test_build/test_robot_config_infantry_standard"
 "$test_build/test_robot_config_sentry_swerve"

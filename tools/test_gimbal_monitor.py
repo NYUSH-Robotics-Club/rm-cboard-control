@@ -40,6 +40,16 @@ class SnapshotTests(unittest.TestCase):
         reader = FakeReader()
         symbols = {'g_gimbal_monitor': (0x20001000, 216), 'uwTick': (0x20000000, 4)}
         self.assertEqual(monitor.read_snapshot(reader, symbols), sample)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/'snapshot.bin'
+            class FakeDumpReader(FakeReader):
+                def call(self, command):
+                    self.command = command
+                    path.write_bytes(data)
+                    return ''
+            fast_reader = FakeDumpReader()
+            self.assertEqual(monitor.read_snapshot(fast_reader, symbols, path), sample)
+            self.assertIn('dump_image ', fast_reader.command)
         reader.sequence_after = 4
         self.assertIsNone(monitor.read_snapshot(reader, symbols))
         with self.assertRaises(monitor.fw.Failure):
@@ -138,6 +148,7 @@ class SnapshotTests(unittest.TestCase):
                 return [0x413]
             def call(self, command):
                 self.commands.append(command)
+                if command == 'poll': return self.state
                 if command == 'stm32f4x.cpu curstate': return self.state
                 if command.startswith('read_memory'): return '1024'
                 if command.startswith('dump_image'):
@@ -148,6 +159,7 @@ class SnapshotTests(unittest.TestCase):
             directory = Path(temp)
             target = FakeTarget(directory, b'image')
             monitor.verify_image_readonly(target, b'image', directory)
+            self.assertEqual(target.commands[:2], ['poll', 'stm32f4x.cpu curstate'])
             self.assertTrue(any(c.startswith('dump_image ') for c in target.commands))
             for forbidden in ('verify_image', 'checksum', 'halt', 'reset', 'resume', 'write_memory', 'mww'):
                 self.assertFalse(any(forbidden in c for c in target.commands))
@@ -157,7 +169,7 @@ class SnapshotTests(unittest.TestCase):
             target.commands = []
             with self.assertRaises(monitor.fw.Failure):
                 monitor.verify_image_readonly(target, b'image', directory)
-            self.assertEqual(target.commands, ['stm32f4x.cpu curstate'])
+            self.assertEqual(target.commands, ['poll', 'stm32f4x.cpu curstate'])
 
     def test_server_has_no_work_ram_or_debugger_port(self):
         command = monitor.openocd_command('openocd', 'ABC123', 4567)
@@ -170,7 +182,7 @@ class SnapshotTests(unittest.TestCase):
             monitor.openocd_command('openocd', 'x; reset', 4567)
 
     def test_argument_validation(self):
-        for args in (['--hz', 'nan'], ['--hz', '0'], ['--duration', '-1']):
+        for args in (['--hz', 'nan'], ['--hz', '0'], ['--duration', '-1'], ['--swd-khz', '999']):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 monitor.main(args)
 

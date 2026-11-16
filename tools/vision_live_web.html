@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>实时视觉监视</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #eaf4f5; background: #09131b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top left, #173649, #09131b 55%); }
+    main { max-width: 1480px; margin: auto; padding: 30px clamp(16px, 3vw, 48px); }
+    header { display: flex; justify-content: space-between; align-items: start; gap: 18px; flex-wrap: wrap; margin-bottom: 24px; }
+    .eyebrow { font-size: 12px; letter-spacing: .18em; font-weight: 700; color: #68d4dc; }
+    h1 { font-size: clamp(28px, 4vw, 44px); margin: 6px 0; }
+    p { color: #96aebb; margin: 8px 0; }
+    .badge { border: 1px solid #d5a45b; border-radius: 100px; color: #f5cb8e; padding: 9px 14px; font-size: 12px; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 18px; }
+    .panel { border: 1px solid #29404c; background: #10222e; border-radius: 18px; overflow: hidden; }
+    .view { padding: 14px; }
+    .stage { min-height: 320px; display: grid; place-items: center; background: #02070a; border-radius: 11px; position: relative; overflow: hidden; }
+    img { display: block; max-width: 100%; max-height: 75vh; }
+    .crosshair { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; transform: translate(-50%,-50%); pointer-events: none; }
+    .crosshair:before, .crosshair:after { content: ''; display: block; position: absolute; background: #e0fff780; }
+    .crosshair:before { width: 1px; height: 26px; left: 13px; }
+    .crosshair:after { height: 1px; width: 26px; top: 13px; }
+    .under { padding: 14px 3px 3px; color: #9fbbc6; font-size: 13px; }
+    aside { padding: 23px; }
+    h2 { margin: 0 0 17px; font-size: 15px; }
+    .metric { padding: 15px 0; border-top: 1px solid #2a4550; }
+    .label { font-size: 12px; color: #94afba; }
+    .value { margin-top: 5px; font-size: 23px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .note { border-left: 3px solid #dea85e; padding-left: 12px; color: #c5d5d9; font-size: 13px; line-height: 1.6; margin-top: 19px; }
+    @media (max-width: 850px) { .layout { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><div><div class="eyebrow">NYU VISION · LIVE VIEW</div><h1>实时视觉监视</h1>
+    <p>实时摄像头画面、候选框和候选中心；仅用于观测。</p></div>
+    <div id="badge" class="badge">只读预览 · 未连接 C 板控制</div></header>
+  <div class="layout">
+    <section class="panel view"><div class="stage"><img src="/stream.mjpeg" alt="等待视频流"><div class="crosshair"></div></div>
+      <div id="status" class="under">正在连接视频流…</div></section>
+    <aside class="panel"><h2>实时状态</h2>
+      <div class="metric"><div class="label">画面帧率</div><div id="fps" class="value">—</div></div>
+      <div class="metric"><div class="label">最新画面年龄</div><div id="age" class="value">—</div></div>
+      <div class="metric"><div class="label">候选框来源</div><div id="source" class="value">—</div></div>
+      <div class="metric"><div class="label">候选框数量</div><div id="boxes" class="value">—</div></div>
+      <div class="metric"><div class="label">最高置信度</div><div id="confidence" class="value">—</div></div>
+      <div class="metric"><div class="label">候选中心像素</div><div id="center" class="value">—</div></div>
+      <div class="metric"><div class="label">候选中心偏移</div><div id="offset" class="value">—</div></div>
+      <div class="metric"><div class="label">C 板 USB 回传</div><div id="board" class="value">未配置</div></div>
+      <div class="metric"><div class="label">原始陀螺仪 Z/X/Y 角速度</div><div id="gyro" class="value">—</div></div>
+      <div id="note" class="note">青色为模型框，橙色为白色光条候选，浅蓝色为过曝蓝光双核心候选；黄色十字是两核心的中点或候选框中心。低于模型正式阈值的诊断框不生成中心点。中心偏移不是云台角度，本页面不会发送控制或开火指令。</div>
+    </aside>
+  </div>
+</main>
+<script>
+  const id = name => document.getElementById(name);
+  const sourceNames = {'local video device': '本机摄像头', 'network stream': '网络视频流', 'video file': '本地视频'};
+  const statusNames = {'connecting': '连接中', 'waiting for frames': '等待画面', 'online': '正常',
+    'stale': '画面超时', 'source unavailable': '视频源不可用', 'stream interrupted': '视频流中断',
+    'detector error': '模型运行错误'};
+  const boardNames = {'waiting for port': '等待 C 板串口', 'waiting for telemetry': '等待回传帧',
+    'receiving': '正在接收', 'telemetry stale': '回传超时', 'pyserial missing': '缺少串口依赖'};
+  async function refresh() {
+    try {
+      const response = await fetch('/metadata', {cache:'no-store'});
+      const data = await response.json();
+      id('status').textContent = `视频状态：${statusNames[data.status] || data.status} · ${sourceNames[data.source_type] || data.source_type} · ${data.resolution ? data.resolution.join('×') : '等待分辨率'} · 已接收 ${data.frames} 帧 · ${data.detector ? '检测模型已启用' : '仅画面预览，未启用检测模型'}${data.scene_condition === 'dark' ? ' · 画面过暗或镜头遮挡' : ''}`;
+      id('fps').textContent = data.frames ? `${data.fps.toFixed(1)} fps` : '—';
+      id('age').textContent = data.frame_age_ms === null ? '—' : `${data.frame_age_ms} ms`;
+      id('source').textContent = data.candidate_source === 'model' ? '模型' : data.candidate_source === 'model diagnostic' ? '模型低分诊断框' : data.candidate_source === 'lightbar geometry' ? '光条几何候选' : data.candidate_source === 'saturated blue pair' ? '蓝光双核心候选' : '未检出';
+      id('boxes').textContent = String(data.candidates);
+      id('confidence').textContent = data.best_confidence === null ? '—' : `${(data.best_confidence * 100).toFixed(1)}%`;
+      id('center').textContent = data.center_px === null ? '—' : `(${data.center_px[0]}, ${data.center_px[1]})`;
+      id('offset').textContent = data.offset_percent === null ? '—' : `${data.offset_percent[0]}%, ${data.offset_percent[1]}%`;
+      id('board').textContent = boardNames[data.board_status] || data.board_status || '未配置';
+      id('gyro').textContent = data.board_connected && data.board_gyro_rad_s ?
+        data.board_gyro_rad_s.map(value => value.toFixed(2)).join(' / ') + ' rad/s' : '—';
+      if (data.diagnostic_override) {
+        id('badge').textContent = `只读诊断 · 候选阈值 ${data.score_floor.toFixed(2)}`;
+        id('note').textContent = '青色为模型框，橙色为白色光条候选，浅蓝色为过曝蓝光双核心候选；黄色十字是两核心的中点或候选框中心。低于模型正式阈值的诊断框不生成中心点；几何候选可能误报，均未做独立标注验证。中心偏移不是云台角度，本页面不会发送控制或开火指令。';
+      }
+    } catch (error) { id('status').textContent = '网页服务未连接'; }
+  }
+  refresh(); setInterval(refresh, 500);
+</script>
+</body>
+</html>

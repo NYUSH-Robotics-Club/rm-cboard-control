@@ -67,16 +67,20 @@ Src/usbd_cdc_if.c
 
 ## MCU 到上位机：命令 0x0002
 
-有效载荷为 `yaw`、`pitch`、`roll` 三个 float。视觉模块订阅
+线协议字段名沿用 `yaw`、`pitch`、`roll`，但当前运行代码依次填入
+`SensorData.g_gz`、`g_gx`、`g_gy`，即原始陀螺仪 Z/X/Y 角速度（rad/s）。
+它们不是云台姿态角，不能用作视觉解算的历史姿态或闭环角度反馈。视觉模块订阅
 `TOPIC_IMU_UPDATE`，并以 `vision_comm.c` 中固定的 10 ms 间隔尝试发送，因此
 标称约 100 Hz；实际频率受 IMU 发布频率、控制任务耗时和 USB busy 状态影响。
 
 当前实现有两个必须注意的兼容问题：
 
-1. `VisionComm_Send()` 使用固定 flags 表达式 `30 << 8 | 1`；
+1. 当前载荷把角速度放在了姿态字段，主机必须按实际含义解释；更改其语义
+   需要单独确认协议版本和现有接收方。
+2. `VisionComm_Send()` 使用固定 flags 表达式 `30 << 8 | 1`；
    `VisionComm_SetFlag()` 保存的 enemy color、work mode 和 bullet speed 目前没有
    被打包进发送帧。
-2. `VisionConfig.send_interval_ms` 虽可被修改，但实际发送判断仍使用
+3. `VisionConfig.send_interval_ms` 虽可被修改，但实际发送判断仍使用
    `vision_comm.c` 内固定的 10 ms 宏。
 
 在修复运行路径前，上位机必须按实际固定 flags 解释，不能按旧文档假设所有

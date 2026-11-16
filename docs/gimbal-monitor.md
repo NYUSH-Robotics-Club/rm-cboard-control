@@ -33,6 +33,8 @@ python3 tools/gimbal_monitor.py --prepare-only
 ```
 
 采样率范围1～100Hz，实际值受SWD读取和电脑终端速度限制；界面显示实测速率。
+读取快照时默认将SWD时钟设为4000kHz并用二进制块读取，以便在约3ms的控制回调间隙取得一致数据；
+可用`--swd-khz 1000`降低速率。若连续2秒仍无一致快照，监控会退出，不会暂停目标CPU。
 `--prepare-only`只检查本地ELF和布局，不连接硬件。默认使用`.firmware.local.json`选择的
 车型/构建和OpenOCD，程序仅依赖Python标准库及已有Arm工具链。
 若Linux提示USB权限不足，查看同名OpenOCD日志，并按现有开发环境说明处理探针访问权限。

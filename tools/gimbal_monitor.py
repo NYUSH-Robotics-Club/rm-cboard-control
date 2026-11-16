@@ -62,13 +62,23 @@ def decode_snapshot(data, sequence_after, live_tick):
     return sample
 
 
-def read_snapshot(client, symbols):
+def read_snapshot(client, symbols, dump_path=None):
     """Read the ELF-sized block and recheck its sequence; preserve writer-overlap rejection."""
     address, size = symbols['g_gimbal_monitor']
-    words = client.words(address, size // 4)
+    if dump_path is None:
+        words = client.words(address, size // 4)
+        data = struct.pack(f'<{len(words)}I', *words)
+    else:
+        # OpenOCD's Tcl read_memory formatting can take longer than a 3 ms
+        # control callback. A binary host dump minimizes the SWD read window.
+        dump_path.unlink(missing_ok=True)
+        client.call(f'dump_image {fw.tcl_word(dump_path.as_posix())} 0x{address:x} {size}')
+        if not dump_path.is_file():
+            raise fw.Failure('OpenOCD snapshot dump failed')
+        data = dump_path.read_bytes()
     sequence = client.words(address, 1)[0]
     tick = client.words(symbols['uwTick'][0], 1)[0]
-    return decode_snapshot(struct.pack(f'<{len(words)}I', *words), sequence, tick)
+    return decode_snapshot(data, sequence, tick)
 
 
 def local_image(elf, gcc, directory):
@@ -136,6 +146,9 @@ def openocd_command(executable, serial, port):
 
 def verify_image_readonly(client, expected, directory):
     """Copy Flash to a host file and compare locally; no target checksum algorithm."""
+    # OpenOCD can report "unknown" immediately after init until its first
+    # target poll. Poll observes CPU state without resuming or resetting it.
+    client.call('poll')
     if client.call('stm32f4x.cpu curstate') != 'running':
         raise fw.Failure('MCU is not running; monitor will not resume/reset it')
     if client.words(0xe0042000, 1)[0] & 0xfff != 0x413:
@@ -235,6 +248,7 @@ def monitor(args):
                 sock.settimeout(10)
                 client = TclClient(sock)
                 verify_image_readonly(client, expected, directory)
+                client.call(f'adapter speed {args.swd_khz}')
                 with csv_path.with_suffix('.json').open('x', encoding='utf-8') as metadata:
                     json.dump({'elf': str(elf), 'elf_sha256': fw.sha256(elf),
                         'probe': serial, 'flash_matches_elf': True, 'requested_hz': args.hz,
@@ -249,7 +263,7 @@ def monitor(args):
                 skipped = 0
                 while args.duration == 0 or time.monotonic()-started < args.duration:
                     iteration = time.monotonic()
-                    sample = read_snapshot(client, symbols)
+                    sample = read_snapshot(client, symbols, directory/'snapshot.bin')
                     if sample is not None:
                         last_good = time.monotonic()
                         sample['host_elapsed_s'] = last_good-started
@@ -291,12 +305,16 @@ def main(argv=None):
     parser.add_argument('--elf', type=Path, help='Exact ELF flashed on the board; defaults to configured build')
     parser.add_argument('--serial', help='ST-Link serial, otherwise use saved probe selection')
     parser.add_argument('--hz', type=float, default=20, help='Host sampling Hz, 1..100 (default 20)')
+    parser.add_argument('--swd-khz', type=int, default=4000,
+                        help='SWD sampling clock after image verification, 1000..4000 kHz')
     parser.add_argument('--duration', type=float, default=0, help='Seconds to record; 0 runs until Ctrl+C')
     parser.add_argument('--csv', type=Path, help='New CSV output path; existing files are never overwritten')
     parser.add_argument('--prepare-only', action='store_true', help='Validate local ELF, without connecting to hardware')
     args = parser.parse_args(argv)
-    if not math.isfinite(args.hz) or not 1 <= args.hz <= 100 or not math.isfinite(args.duration) or args.duration < 0:
-        parser.error('--hz must be 1..100; --duration must be finite and nonnegative')
+    if (not math.isfinite(args.hz) or not 1 <= args.hz <= 100 or
+            not math.isfinite(args.duration) or args.duration < 0 or
+            not 1000 <= args.swd_khz <= 4000):
+        parser.error('--hz must be 1..100; --duration must be finite and nonnegative; --swd-khz must be 1000..4000')
     monitor(args)
 
 

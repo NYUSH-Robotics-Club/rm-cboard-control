@@ -23,7 +23,8 @@ USB CDC 接收
 - 发布旧协议消息；
 - 再由适配器转换成传输无关的视觉目标消息。
 
-姿态回传由 IMU 主题触发，`vision_comm.c` 中固定使用 10 ms 间隔，即约 100 Hz。
+当前 IMU 回传由 IMU 主题触发，`vision_comm.c` 中固定使用 10 ms 间隔，即约 100 Hz。
+回传的三个 float 实际是原始陀螺仪 Z/X/Y 角速度（rad/s），不是姿态角。
 回传字节现在通过 `bsp/usb` 发送；冻结的 USB 接收回调仍保持不变。
 
 ## 双轴目标与控制
@@ -83,6 +84,79 @@ pitch/yaw 是相对当前电机位置的弧度误差；C 板回传也采用 Seas
 与 `nyu-vision` 期望的 `SP` 四元数状态帧不同。离线仿真确认 `SP` 帧
 不会产生视觉目标，因此两端尚不能直接运行同一条自瞄链。接入前须确定
 双向协议、角度坐标系和符号、时间基准、失联与开火语义，并对照实车验证。
+
+### 网页查看视觉画面
+
+在仓库根目录运行只读离线回放：
+
+```bash
+python3 tools/vision_replay_web.py
+```
+
+浏览器打开 `http://127.0.0.1:8765`，可逐帧查看演示图、
+`nyu-vision` 模型导出的候选框及置信度。默认读取
+`build/vision-labeling/demo/` 和 `build/vision-labeling/nyu-predictions.csv`；
+也可通过 `--images`、`--predictions` 指定同格式数据。页面只绑定本机回环地址，
+远程访问时可用 SSH 端口转发 `-L 8765:127.0.0.1:8765`。
+使用 VS Code Remote 时，在“端口”面板转发远端 `8765`，再打开面板显示的
+“转发地址”；浏览器自己的 `127.0.0.1` 不会自动指向远端主机。
+服务不向 C 板发送指令。候选框尚无人工真值，画面中心偏移不是云台角度或命中率。
+
+UGREEN USB 摄像头在本机映射为 `/dev/video0`。实时只读预览使用
+V4L2 请求 1280×720 MJPEG、30 fps；实际显示帧率由摄像头和推理耗时决定：
+
+```bash
+python3 tools/vision_live_web.py --source 0
+```
+
+如需叠加 `nyu-vision` 的 YOLOv5 ONNX 候选框：
+
+```bash
+python3 -m pip install --target /tmp/vision-onnxruntime --no-deps onnxruntime
+PYTHONPATH=/tmp/vision-onnxruntime python3 tools/vision_live_web.py \
+  --source 0 --model nyu-vision/assets/yolov5.onnx
+```
+
+可选 `--score-floor VALUE` 只调整网页中的候选框诊断阈值，页面会显式标记
+该覆盖值；它不会修改模型、车型配置或向 C 板发送指令。降低阈值可能增加误报，
+应先用人工标注的独立录制数据验证，再考虑写入正式配置。
+
+同样打开 `http://127.0.0.1:8765`。页面在候选框上画中心十字，
+同时尝试用成对高亮竖条与暗色内部，或蓝色光晕中的两个过曝亮核，寻找
+**仅供显示**的几何候选框。过曝双核优先取两侧足够大的最亮连续核心的质心中点，
+若最亮区域太小则退回普通亮核质心；不使用大框中心或固定像素偏移。
+青色表示模型候选、橙色表示白色光条候选、浅蓝色表示过曝双核候选；
+侧栏标明来源、中心像素和图像百分比偏移。
+两类结果都可能误报，不能仅凭框把目标角度发送给 C 板。这条 Python 路径不执行
+`nyu-vision` 的跟踪、角点修正、解算或开火逻辑；中心偏移不是云台指令。
+当 `--score-floor` 低于配置阈值时，低分模型框仍可显示用于诊断，但单独的
+低分框不会生成中心点；几何候选按各自的中心规则显示。画面几乎全黑时，
+页面提示可能遮挡/欠曝，并跳过该帧模型推理。
+若摄像头设备号变化，可将 `--source 0`
+改为实际设备号；`--source` 也接受 RTSP/HTTP 地址。默认不读取 C 板回传，
+即使启用下述只读接口，也无法从当前角速度帧推导出实测云台瞄准误差或命中率。
+
+可选安装 pyserial 并指定 C 板 USB CDC 设备，启用**只读**回传解析：
+
+```bash
+python3 -m pip install --target /tmp/vision-serial --no-deps pyserial
+PYTHONPATH=/tmp/vision-onnxruntime:/tmp/vision-serial python3 tools/vision_live_web.py \
+  --source 0 --model nyu-vision/assets/yolov5.onnx --score-floor 0.20 \
+  --cboard-port /dev/ttyACM0
+```
+
+`--cboard-port` 必须替换为实际枚举出的设备路径；程序在设备出现后重试连接，
+只统计 CRC 正确的 22 字节 `0x0002` 回传帧。页面显示的是陀螺仪角速度，
+不是云台角度。设备是否已连接应以当次 `/metadata` 的 `board_connected` 和 SWD 检查为准，
+不能仅由主机测试推断实机收包。
+本命令不会向串口写入字节，也不会驱动云台。
+
+`nyu-vision` 自带的实时网页入口是从其目录执行
+`just test detect --web`，默认打开 `http://127.0.0.1:8888`。
+该入口需要视觉工程依赖、相机和其期望的串口状态；当前视觉工程
+发送的 `SP` 帧与本固件的 Seasky 接收协议不匹配，因此不能用
+`--send` 将它作为 C 板联动实验。实时网页中的 TX/RX 数值也不能在
+协议匹配并经板上验证前视作本固件的实际控制效果。
 
 ### 合成闭环自动调参
 
