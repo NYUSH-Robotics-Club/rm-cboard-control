@@ -1,0 +1,4 @@
+interface:
+  display_name: "电机 CAN 调试"
+  short_description: "通过 ST-Link RTT 或达妙 USB-CAN 进行电机接入、读写与故障定位"
+  default_prompt: "使用 $motor-can-debug 排查电机 CAN 通信，先确认连接链路和新鲜反馈，再执行我明确要求的操作。"

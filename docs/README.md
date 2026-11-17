@@ -4,6 +4,7 @@
 
 - [接线、构建、ST-Link 接入与排障](diagnosis.md)
 - [架构、RTT 终端协议与并发约定](architecture/overview.md)
+- [电机 CAN 调试 skill（含电脑直连 USB-CAN）](../skills/motor-can-debug/SKILL.md)
 - [硬件边界与待验证事项](project/PROJECT_MEMO.md)
 
 `official-docs/` 保留既有硬件手册。旧整车实现可从主分支或 Git 历史查阅，
