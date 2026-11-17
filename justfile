@@ -1,36 +1,22 @@
-﻿# Python acts as the recipe interpreter; Windows does not need sh or Git Bash.
-set shell := ["python3", "tools/firmware.py", "--just"]
-set windows-shell := ["py", "-3", "tools/firmware.py", "--just"]
-
 default:
-    help
+    @just --list
 
-configure robot mode="Debug" run="yes":
-    configure {{robot}} --mode {{mode}} --run-after {{run}} --allow-single yes
+build mode="Debug":
+    python3 tools/diagnosis/manage.py build --mode {{mode}}
 
-doctor:
-    doctor
+test:
+    sh tests/host/run_tests.sh
 
-build robot="":
-    build {{robot}}
+# Explicitly programs the selected board, verifies, then starts passive firmware.
+flash *args:
+    python3 tools/diagnosis/manage.py flash {{args}}
 
-flash robot="":
-    flash {{robot}}
+# Keep this process running; no reset/halt/flash on live attachment.
+connect *args:
+    python3 tools/diagnosis/manage.py connect {{args}}
 
-flash-plan robot="":
-    flash-plan {{robot}}
+interface mode="Debug":
+    python3 tools/diagnosis/interface.py --elf build/{{mode}}/CBoard_Diagnosis.elf
 
-# Read the running board; first build/flash the firmware containing the snapshot.
-monitor hz="20":
-    monitor --hz {{hz}}
-
-# Start the RTT telemetry dashboard in a browser.
-logger *args:
-    logger {{args}}
-
-# Start the terminal RTT dashboard.
-logger-cli *args:
-    logger-cli {{args}}
-
-alias lg := logger
-alias lc := logger-cli
+demo:
+    python3 tools/diagnosis/interface.py --demo

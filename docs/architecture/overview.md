@@ -1,205 +1,62 @@
-# 全局结构与后续调试说明
+# 诊断固件结构
 
-这是当前代码的总入口。具体任务边界和未知硬件见
-[项目记忆](../project/PROJECT_MEMO.md)，RTOS 细节见 [RTOS 说明](rtos-migration.md)。
+依赖方向为 `runtime -> services/core -> bsp -> HAL`。诊断是有意暴露原始 CAN
+的工具，原始帧契约在 `core/diagnosis/`；不经过整车电机控制器或厂商适配器。
 
-## 1. 程序从哪里开始
+| 目录 | 职责 |
+| --- | --- |
+| `runtime/diagnosis/` | 独立入口、72 MHz 时钟树、中断向量实现、主循环 |
+| `services/diagnosis/` | 校验主机请求、发布状态、环形事件记录 |
+| `core/diagnosis/` | 固定 32 位字的 SWD 内存契约 |
+| `bsp/diagnosis/` | 两路 CAN、接收回调、发送完成/失败/超时、寄存器快照 |
+| `tools/diagnosis/` | OpenOCD Tcl 连接、主机校验、本地网页、明确烧录入口 |
+| `tests/host/` | 主机服务测试、HAL 替身下的 CAN 行为测试 |
 
-`Src/main.c` 仍是复位后的入口，负责一次性的板级初始化、云台上电位置锁存、
-IMU 校准、应用订阅和通信启动。完成后调用 `RobotRtos_Start()`；
-当前单个静态控制任务为：
+顶层 CMake 调用冻结的生成文件，再筛选目标源码：只使用 GPIO、CAN、MSP、
+syscalls/sysmem 与启动汇编。生成的 HAL/USB 库保留原构建，未使用的代码由链接器
+回收。旧 `Src/main.c`、中断文件和 USB 应用源码不编译；没有 RTOS、IMU 或遥控控制。
+底层文件没有因为诊断入口而改写。
 
-```text
-每轮（完成后等待两次 1 ms tick，沿用旧 HAL_Delay(1) 的等待语义）
-  gyro_data_update
-  -> AppRuntime_Step（当前没有注册可选模块）
-  -> CmdController_Task
-  -> MsgCenter_Dispatch
-       -> chassis / gimbal / shooter 回调
-       -> MotorService_Flush（派发结束钩子）
-  -> MotorOfflineAlarm_Task
-  -> Dashboard_Task（至少20ms间隔，CAN提交后打包RTT）
-  -> 1 Hz CAN 统计（日志限流）
-  -> vTaskDelay(2 ticks)
-```
+## 运行与所有权
 
-`runtime/rtos/robot_rtos.c` 实现上述静态控制任务，并提供空闲任务的静态内存。
-运行期间声光输出由电机离线报警管理。该设计禁止动态分配任务内存。视觉或日志
-只有在测出执行时间、栈和共享状态后，才适合拆成新任务。
+两路 CAN 以 1 Mbps 只听启动。正常模式和内部静默回环仅由显式配置请求选择。
+正常模式会参与 ACK；只听模式不 ACK。CAN 使用固定 12 TQ、APB1=36 MHz，
+支持 125/200/250/500/1000 kbps，关闭自动重传和自动 Bus-off 恢复。
 
-## 2. 目录与职责
+RX0 ISR 经 HAL 回调将时间戳、ID、标准/扩展、数据/远程标志、DLC 和八字节原始
+数据写入容量 64 的 BSP 队列。两路 IRQ 同优先级、不互相抢占。队列满丢弃新帧，
+`rx_dropped` 累计软件溢出与已观察到的硬件 FIFO overrun 次数，后者不是精确丢帧数。
+主循环在短临界区取出事件，每轮最多处理 64 个。ISR 不访问主机命令或 SWD 事件环。
 
-```text
-application/       cmd 路由、底盘、云台、发射业务
-  runtime/         可选应用模块的集中登记和生命周期
-runtime/rtos/      FreeRTOS 配置、静态任务和调度器启动
-core/              状态码、跨层消息、底盘/电机/视觉接口
-services/          面向应用的电机与底盘选择服务
-adapters/          厂商电机、底盘运动学和视觉传输适配
-modules/           算法、设备解析、协议编解码、消息中心
-bsp/               当前 STM32 板卡的 CAN/SPI/UART/USB/时间/临界区
-config/robots/     两套车型的只读电机和底盘配置
-tests/host/        不接开发板即可运行的行为与协议测试
-Middlewares/       STM32 中间件和固定版本 FreeRTOS 内核
-Src/ Inc/ Drivers/ CubeMX 生成的硬件基线
-docs/              现行说明；旧实验可从 Git 历史查阅
-```
+每总线最多一个在途发送。`TX_QUEUED` 仅代表 HAL 邮箱接收；轮询 TSR 的完成位
+决定 `TX_OK` 或 `TX_ERROR`，TX IRQ 不启用以保留完成位的所有权。
+`last_tx_tsr` 锁存完成/超时时的 TSR，`tsr` 为当前值。50 ms 未完成则请求取消并
+报告 `TX_TIMEOUT`，邮箱仍被占用，直至硬件确认。取消失败持续 BUSY，不自动重发；
+取消与成功竞争可随后产生 `TX_OK`。Bus-off 由操作员排除原因后重新应用配置。
 
-BSP 全称 Board Support Package（板级支持包）。凡是“这块板使用哪个外设、引脚、
-DMA、HAL 句柄”都属于 BSP；CAN ID 含义、反馈字段和控制策略不属于 BSP。
+## SRAM ABI v1
 
-## 3. 依赖方向
+全局符号 `g_diagnosis` 位于普通 SRAM，不在 CCM。主机从所选 ELF 的符号表定位，
+启动时校验 magic `0x44494147`、ABI `1` 和长度 `5376`，不猜固定地址。
 
-```mermaid
-flowchart LR
-  RTOS["runtime/rtos"] --> APP["application"]
-  APP --> CORE["core contracts/interfaces"]
-  APP --> SVC["services"]
-  SVC --> ADP["adapters"]
-  ADP --> MOD["modules/protocols"]
-  MOD --> BSP["bsp"]
-  BSP --> HAL["STM32 HAL/CubeMX"]
-  APP --> MC["message center"]
-  MOD --> MC
-```
+| 字偏移（每字 4 字节） | 内容 |
+| --- | --- |
+| 0–15 | magic、ABI、长度、version、uptime_ms、loops、event_head、ack、result、保留 |
+| 16–47 | CAN1/CAN2 各 16 字状态，定义见 `DiagnosisBus` |
+| 48–63 | 主机请求，定义见 `DiagnosisRequest` |
+| 64–1343 | 128 个事件，每条 10 字，定义见 `DiagnosisEvent` |
 
-规则只有几条：
+主机先写请求参数，最后单独写非零 `seq`；固件对每个新序号执行一次并返回
+`ack/result`。主机只在旧请求已确认后提交下一个请求。状态用 version 奇偶数
+发布，读前后相同且为偶数才接受。固件循环间的 HAL 延时提供读取窗口；主机
+读取不到稳定快照时报错，不通过暂停 MCU 来读取。
 
-- 应用不拼 CAN 帧、不访问 HAL、不包含厂商协议头。
-- 业务载荷放 `core/contracts/`；线协议结构不能直接进入应用。
-- 消息中心只排队和派发，不知道电机、底盘、视觉是什么。
-- 电机命令统一走 `MotorService`，底盘几何走 `ChassisStrategy`。
-- 未知参数必须在配置校验中失败，不能借用另一厂商默认值。
-- 原始 CAN 帧先校验为 8 字节标准数据帧；重复的厂商物理地址/槽位拒绝启动。
-- 只有运行时组合根可以同时知道 RTOS 和应用生命周期。
+事件槽写入前 seq=0，写完后提交序号，最后推进 event_head。主机按序号检查覆盖，
+并复核可能正在被重写的最旧槽的提交字；检测到的遗漏计数可见。序号回绕或
+观察到 MCU 时间倒退会清空主机历史，重新开始读取。低速 SWD 或满载 CAN 会丢记录，
+因此网页和 JSON 不能替代总线分析仪。主机保留最近 1000 条，导出的是这一窗口。
 
-## 4. 遥控器到 CAN 帧怎么读
-
-读完 `main.c` 后建议按以下顺序：
-
-1. `modules/remote/remote_control.c`：DR16 字节如何变成 `RemoteControlMessage`。
-2. `core/contracts/remote_messages.h`、`control_messages.h`：模块之间传什么。
-3. `application/cmd/cmd_controller.c`：订阅输入、发布三类命令。
-4. `application/cmd/command_router.c`：遥控开关、手动/小陀螺/跟随/视觉策略。
-5. 目标控制器，例如 `application/chassis/chassis_controller.c`。
-6. `services/motor/motor_service.c`：查配置、选择厂商和控制环。
-7. `adapters/motor/*_motor_adapter.c`：统一电流如何变成厂商命令。
-8. `modules/motor_protocols/`：DM、本末、瓴控的字节排列；DJI 走旧
-   `modules/motor/` 与 `modules/can_comm/`。
-9. `bsp/can/bsp_can.c`：最后一层 HAL CAN 发送。
-
-反向反馈是 `bsp/can -> CAN_Manager -> TOPIC_CAN_RX -> 厂商 adapter -> snapshot`；
-DJI 还会发布旧的标准电机反馈主题供兼容驱动使用。
-
-命令入口记录最后一次 RC 更新；200 ms 没有新帧时，路由器统一发布禁用命令。
-小陀螺 yaw 目标按真实毫秒差积分，不依赖控制任务恰好运行在某个固定频率。
-
-## 5. 新增 application 功能
-
-优先使用四类接口：
-
-- 消息：`MsgCenter_Subscribe()` / `MsgCenter_Publish()`；载荷先定义在
-  `core/contracts/`，必须小于 128 字节。
-- 电机：`MotorService_GetSnapshot()`、`MotorService_CommandCurrent()`、
-  `MotorService_CommandConfigured()`；每次检查返回状态。
-- 底盘：通过 `ChassisStrategy_Get()` 选择运动学，不在应用写车型分支。
-- 生命周期：实现 `AppModule {name, init, step, safe_stop}`，只在
-  `application/runtime/app_manifest.c` 增加一项。不要再改 `main.c`。
-
-`init` 只能登记资源和订阅；`step` 不能阻塞；`safe_stop` 必须能让输出回到安全值。
-需要新板级 I/O 时先加 BSP 接口，再由模块/适配器使用。
-
-## 6. 底盘状态
-
-| 类型 | 状态 | 修改位置 |
-|---|---|---|
-| 麦轮 | 策略保留，现有车型未选择 | `adapters/chassis/mecanum_chassis_strategy.c` |
-| 现有舵轮 | 保留双舵电机哨兵实现 | `application/chassis/sentry_controller.c` |
-| 全向轮 | 当前步兵使用，轮序 2/1/4/3 | `adapters/chassis/omni_chassis_strategy.c` |
-
-通用四模块舵轮还缺模块坐标、零位、轮半径、减速比和反转策略。没有这些资料时
-不能把现有哨兵实现称为通用舵轮。
-
-## 7. 电机与控制环
-
-`MotorConfig_t.vendor` 选择 DJI、DM、本末或瓴控；`control_mode` 是可调开关：
-
-| 模式 | 含义 |
-|---|---|
-| `APPLICATION` | 保留当前控制器算出的电流/命令 |
-| `DISABLED` | 安全停机；支持失能帧的适配器会使用失能帧 |
-| `OPEN_LOOP_CURRENT` | 设定值直接作为协议命令并限幅 |
-| `SPEED` | 单速度 PID |
-| `POSITION` | 单位置 PID |
-| `POSITION_SPEED_CASCADE` | 位置外环、速度内环 |
-
-运行时可用 `MotorService_SetControlMode()` 临时覆盖，
-`MotorService_ClearControlModeOverride()` 恢复车型配置；切换会重置 PID。
-
-| 厂商 | 已有代码 | 使用前必须配置 |
-|---|---|---|
-| DJI | M3508/M2006/GM6020 兼容路径 | CAN ID、方向、PID、限幅 |
-| DM | MIT 编解码、反馈、FC/FD 使能状态 | 型号对应 P/V/T 范围、控制/反馈 ID |
-| 本末 | BM1505B 0x32/0x33 分组、0x105/0x106 配置 | 地址、反馈 ID、模式、限幅、反馈周期 |
-| 瓴控 | 0x280 广播电流、0x141~0x144 反馈 | 厂商工具开启广播模式、限流、编码器分辨率 |
-
-现有两套车型没有配置后三种电机，所以代码不会向它们发帧。第一次实车必须先
-`DISABLED` 看反馈，再用极小开环命令核对方向和急停，最后才调 PID。
-
-当前通用 adapter 可用于走 `MotorService_CommandConfigured()` 的驱动/发射角色；
-现有云台和哨兵转向仍读取 DJI `MotorContext_t` 的内部状态，尚不能只换配置就改成
-DM、本末或瓴控。这是已记录的兼容债务，不能宣称全角色无条件互换。
-
-## 8. 云台上电与视觉
-
-云台等待 yaw/pitch 有效反馈后清 PID，yaw 锁存实际角度；pitch 的 `initial_angle`
-非负时作为启动及重新对齐目标，负数则锁存实际角度。步兵 pitch 初始目标为1971，
-绝对编码目标限制在1607～2374；启动时反馈或目标越界则双轴零输出。
-目标限位不能保证机械位置不因惯性越界；校准回调不会在反馈前输出。
-若仍突跳，先看两轴首帧时间、ID、方向和重力补偿，不要先加大 PID。
-
-当前视觉链：
-
-```text
-USB CDC/Seasky -> VisionComm -> LegacyVisionBridge
--> VisionTargetMessage -> CommandRouter
-```
-
-Jetson 新端口只需解码后发布 `TOPIC_VISION_TARGET`。摄像头算法在 Jetson，MCU
-只需要时间戳、坐标系、单位、有效位、CRC/序号和超时规则。型号未知时不得写死
-分辨率、内参或帧率。
-
-## 9. 编译、烧录和验证
-
-```bash
-cmake -S . -B build/infantry \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/gcc-arm-none-eabi.cmake \
-  -DROBOT_TYPE=infantry_standard
-cmake --build build/infantry --parallel
-
-cmake -S . -B build/sentry \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/gcc-arm-none-eabi.cmake \
-  -DROBOT_TYPE=sentry_swerve
-cmake --build build/sentry --parallel
-
-./tests/host/run_tests.sh
-```
-
-产物 ELF 通过 `just flash` 或统一 VS Code 任务，使用推荐的 OpenOCD 写入 STM32F407。
-详细步骤见[构建与烧录](../quickstart.md)。主机测试不覆盖 ARM 链接、
-中断转接、栈、时序和真实电机，烧录前必须完成两车型 ARM 构建。
-
-## 10. 当前主要问题
-
-- FreeRTOS 已在源码中接回；控制周期、栈余量、异常转接和实际运动尚未上板验证。
-- 旧 Quaternion EKF 在首次控制周期使用 libc heap 且未检查分配失败；这不属于
-  FreeRTOS 动态任务，但必须在链接后核对 RAM，并作为后续静态化工作处理。
-- 消息队列满会覆盖旧消息，已提供覆盖和批次上限统计；
-  仍须通过实际负载判断是否丢失重要状态。
-- 新电机只有协议与主机测试，没有具体型号配置和实车结果。
-- 云台和哨兵转向的控制状态仍绑定 DJI 旧上下文，新厂商目前主要兼容统一电机
-  服务和可配置的驱动/发射路径。
-- 通用四模块舵轮几何、Jetson 新协议与摄像头标定仍未知；当前步兵全向轮
-  几何已配置，实际方向和带载行为仍须实车验证。
-- gimbal/sentry 仍保留少量 DJI 旧状态读取，是后续兼容债务。
-- 构建、主机回归与板上验证结果应按本次源码和产物分别记录。
+一个 OpenOCD 会话独占 ST-Link，一个 Python 进程独占命令邮箱。不要同时运行 IDE
+调试会话或多个主机进程。网页操作由主机锁串行化。网页只绑定 127.0.0.1，写请求
+使用随机会话 token 与本地 Origin 校验。连接、状态读取和网页启动不含复位、暂停、
+恢复或烧录命令；`manage.py flash` 是独立且明确的写板操作。

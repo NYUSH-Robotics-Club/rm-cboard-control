@@ -1,1 +1,0 @@
-/* Upstream daemon includes this header but uses none of its declarations. */

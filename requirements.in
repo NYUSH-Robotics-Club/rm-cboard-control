@@ -1,4 +1,0 @@
-# Host logging, RTT dashboards, and plotting; resolve updates with uv pip compile --upgrade.
--r scripts/requirement.txt
-numpy
-matplotlib

@@ -1,4 +1,0 @@
-[submodule "nyu-vision"]
-	path = nyu-vision
-	url = git@github.com:NYUSH-Robotics-Club/nyush-rm-vision.git
-	branch = main
