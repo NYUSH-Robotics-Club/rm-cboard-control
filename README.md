@@ -10,6 +10,8 @@ Firmware and tooling for the NYUSH Robotics Club RoboMaster C Board (STM32F4).
 
 ## Documentation
 
+- **[VR chassis teleoperation](tools/vr/README.md)** — Quest calibration, original-player virtual serial link, firmware snapshot and limitations
+
 All maintained technical documentation is organized under [`docs/`](docs/README.md).
 The main entry points are:
 

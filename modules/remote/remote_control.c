@@ -11,6 +11,97 @@ RC_ctrl_t rc_ctrl;
 static volatile uint32_t rc_frame_count;
 static uint8_t last_sbus_frame[RC_FRAME_LENGTH];
 static uint32_t s_daemon_tick_ms;
+/* A healthy physical receiver always owns TOPIC_RC_UPDATE. The VR adapter
+ * never refreshes a command on timeout, so the existing controller watchdog
+ * remains authoritative. Channel 3 uses the existing normalized forward units. */
+#define VR_RC_TIMEOUT_MS 200U
+#define VR_FRAME_BYTES 39U
+#define VR_FORWARD_MAX 100
+static volatile uint32_t last_dbus_ms;
+static volatile uint8_t dbus_seen;
+static uint8_t vr_frame[VR_FRAME_BYTES], vr_len, vr_released, vr_seen;
+static uint16_t vr_seq;
+static uint32_t vr_last_ms;
+/* Read-only SWD diagnostics; control does not consume these counters. */
+volatile uint32_t vr_uart_valid_count;
+volatile uint32_t vr_uart_publish_count;
+volatile uint32_t vr_uart_last_axes;
+
+static uint16_t vr_crc(const uint8_t *data, uint8_t size, uint16_t value, uint16_t poly)
+{
+    while (size--) {
+        value ^= *data++;
+        for (unsigned i = 0; i < 8U; ++i)
+            value = (value >> 1) ^ ((value & 1U) ? poly : 0U);
+    }
+    return value;
+}
+
+static void vr_accept(uint32_t now_ms)
+{
+    const uint8_t *p = &vr_frame[7];
+    if (memcmp(p, "VRD2", 4) != 0 || p[6] > 1U || p[7] > 1U || (p[7] && p[6])) return;
+    for (unsigned i = 12; i < 30; ++i) if (p[i] != 0U) return;
+    uint16_t seq = (uint16_t)p[4] | ((uint16_t)p[5] << 8);
+    int forward = (int16_t)((uint16_t)p[8] | ((uint16_t)p[9] << 8));
+    int right = (int16_t)((uint16_t)p[10] | ((uint16_t)p[11] << 8));
+    if (forward < -VR_FORWARD_MAX || forward > VR_FORWARD_MAX ||
+        right < -VR_FORWARD_MAX || right > VR_FORWARD_MAX ||
+        (!p[6] && (forward != 0 || right != 0))) return;
+    ++vr_uart_valid_count;
+    if (p[7]) return; /* Diagnostic-only frames never publish a control message. */
+    if (dbus_seen && (uint32_t)(now_ms - last_dbus_ms) <= VR_RC_TIMEOUT_MS) {
+        vr_seen = 0U;
+        vr_released = 0U;
+        return;
+    }
+    if (vr_seen && (uint32_t)(now_ms - vr_last_ms) > VR_RC_TIMEOUT_MS) {
+        vr_seen = 0U;
+        vr_released = 0U;
+    }
+    if (!vr_seen && p[6]) return;
+    uint16_t delta = (uint16_t)(seq - vr_seq);
+    if (vr_seen && (delta == 0U || delta > 32767U)) return;
+    vr_seen = 1U;
+    vr_seq = seq;
+    vr_last_ms = now_ms;
+    if (!p[6]) vr_released = 1U;
+    if (!vr_released) return;
+    RC_ctrl_t vr = {0};
+    vr.rc.s[0] = RC_SW_DOWN;
+    vr.rc.s[1] = RC_SW_DOWN;
+    vr.rc.ch[3] = (int16_t)forward;
+    /* The existing router negates channel 2 to produce left-positive vy. */
+    vr.rc.ch[2] = (int16_t)right;
+    vr_uart_last_axes = ((uint32_t)(uint16_t)right << 16) | (uint16_t)forward;
+    ++vr_uart_publish_count;
+    (void)MsgCenter_Publish(TOPIC_RC_UPDATE, &vr, sizeof(vr));
+}
+
+static void vr_poll(uint32_t now_ms)
+{
+    for (unsigned budget = 0; budget < 256U; ++budget) {
+        int byte = BspRc_VtmReadByte();
+        if (byte < 0) break;
+        if (vr_len == 0U && byte != 0xA5) continue;
+        vr_frame[vr_len++] = (uint8_t)byte;
+        if (vr_len == 7U &&
+            (vr_frame[1] != 30U || vr_frame[2] != 0U ||
+             vr_frame[5] != 2U || vr_frame[6] != 3U ||
+             vr_crc(vr_frame, 4, 0xFF, 0x8C) != vr_frame[4])) {
+            uint8_t i = 1;
+            while (i < vr_len && vr_frame[i] != 0xA5U) ++i;
+            vr_len -= i;
+            memmove(vr_frame, vr_frame + i, vr_len);
+        }
+        if (vr_len == VR_FRAME_BYTES) {
+            uint16_t tail = (uint16_t)vr_frame[37] | ((uint16_t)vr_frame[38] << 8);
+            if (vr_crc(vr_frame, 37, 0xFFFF, 0x8408) == tail) vr_accept(now_ms);
+            vr_len = 0U;
+        }
+    }
+}
+
 static void on_frame(const uint8_t *frame, uint16_t length)
 {
     NyushRemoteSnapshot decoded;
@@ -25,6 +116,8 @@ static void on_frame(const uint8_t *frame, uint16_t length)
     rc_ctrl.mouse.press_r = decoded.buttons[1];
     rc_ctrl.key.v = decoded.keys;
     memcpy(last_sbus_frame, frame, RC_FRAME_LENGTH);
+    last_dbus_ms = BspTime_NowMs();
+    dbus_seen = 1U;
     rc_frame_count++;
     (void)MsgCenter_Publish(TOPIC_RC_UPDATE, &rc_ctrl, sizeof(rc_ctrl));
 }
@@ -32,6 +125,7 @@ static void poll_receiver(void *user)
 {
     (void)user;
     uint32_t now_ms = BspTime_NowMs();
+    vr_poll(now_ms);
     if ((uint32_t)(now_ms - s_daemon_tick_ms) >= 10U) {
         s_daemon_tick_ms = now_ms;
         NyushRemote_DaemonTick();
@@ -44,6 +138,7 @@ void remote_control_init(void)
     /* Upstream RobotInit excludes IRQs until instance and daemon pointers exist. */
     BspCriticalState state = BspCritical_Enter();
     NyushRemote_Init();
+    BspRc_VtmInit();
     BspCritical_Exit(state);
     (void)MsgCenter_AddAfterDispatchHook(poll_receiver, NULL);
 }

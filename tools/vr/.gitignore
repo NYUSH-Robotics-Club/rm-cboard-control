@@ -1,0 +1,9 @@
+.venv/
+config.local.json
+runtime/
+__pycache__/
+*.pyc
+*.log
+pc/virtual-serial/install/
+pc/virtual-serial/discovery-node.json*
+quest_runtime/repository_calibration_sessions/

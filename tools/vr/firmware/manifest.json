@@ -1,0 +1,31 @@
+{
+  "archived_on": "2026-11-18",
+  "timezone": "Asia/Shanghai",
+  "firmware_base_commit": "a816dd5d047c807b03bf491198ce5fc39211f9c6",
+  "robot": "infantry_standard",
+  "artifacts": {
+    "NYUSH_Infantry.bin": {
+      "sha256": "230d5a314fbf742f74bb9adfa7730a00d7ada79a8df09cce6096978ad640fee3",
+      "bytes": 171148
+    },
+    "NYUSH_Infantry.elf": {
+      "sha256": "1e92848bebc5144a3759d70bf01dff111af49e19e0728616b1771a5574b0f3c8",
+      "bytes": 2261548
+    },
+    "NYUSH_Infantry.hex": {
+      "sha256": "551ec95647440b66ae6957f74e540e6acb9e99c0a7a8dcee7269efdaa26c8fa0",
+      "bytes": 481452
+    },
+    "NYUSH_Infantry.map": {
+      "sha256": "bdc4c00fb84f4894c415bc05a8ef80d3498e088282dc1f88ec4eb63c319f7f11",
+      "bytes": 1567683
+    }
+  },
+  "active_c_source_sha256": {
+    "bsp/remote/bsp_rc.c": "b74f71a6404a8c23a329fc9ab13363f9ae3d9c63df7e89e9f45c0223fba53d54",
+    "bsp/remote/bsp_rc.h": "84e8bd475b2462c2d186a71e5f86eb12173afbaefbac7334174c8b980b0eacb0",
+    "modules/remote/remote_control.c": "c21dec6168811f207bfed9f3fcc35738ca81f9100c2f427677dc32d9d42b6cb6",
+    "config/robots/infantry_standard.c": "e3190a4cf1c81055c3ccadeaa1ed5294c808e09cd48252365907190b7652a092"
+  },
+  "note": "These are the existing flashed artifacts; archive verification did not flash/reset hardware."
+}

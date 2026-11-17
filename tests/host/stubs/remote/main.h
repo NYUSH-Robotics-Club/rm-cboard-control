@@ -5,12 +5,17 @@
 typedef struct { volatile uint32_t SR, DR, CR3; } TestUart;
 typedef struct { volatile uint32_t CR, NDTR; } TestDma;
 typedef struct { TestDma *Instance; } DMA_HandleTypeDef;
-typedef struct { TestUart *Instance; uint32_t ErrorCode; DMA_HandleTypeDef *hdmarx; uint8_t *pRxBuffPtr; uint32_t gState; } UART_HandleTypeDef;
+typedef struct { TestUart *Instance; uint32_t ErrorCode; DMA_HandleTypeDef *hdmarx; uint8_t *pRxBuffPtr; uint32_t gState; uint32_t RxState; } UART_HandleTypeDef;
 typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
 extern TestUart test_uart;
 #define USART3 (&test_uart)
 #define USART1 ((TestUart *)0)
 #define HAL_UART_STATE_BUSY_TX 0x21U
+/* VR archive host stub: no ARM memory ordering is modeled here. */
+#define HAL_UART_STATE_READY 0x20U
+#define HAL_UART_STATE_BUSY_RX 0x22U
+#define __DMB() ((void)0)
+HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *, uint8_t *, uint16_t);
 #define USART3_IRQn 0
 #define DMA1_Stream1_IRQn 1
 #define UART_FLAG_PE 1U

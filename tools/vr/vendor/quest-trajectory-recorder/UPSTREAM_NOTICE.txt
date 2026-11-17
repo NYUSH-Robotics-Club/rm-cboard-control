@@ -1,0 +1,4 @@
+Snapshot of the user's quest-trajectory-recorder source.
+Upstream pyproject.toml declares MIT, author Pengyue, version 0.2.0.
+Original source and metadata are retained unchanged. No APK is redistributed.
+Upstream commit metadata was not supplied; source SHA256s are in ../../source-snapshot.json.

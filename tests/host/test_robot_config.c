@@ -39,6 +39,15 @@ int main(void)
     }
 #if defined(ROBOT_TYPE_infantry_standard)
     assert(robot->chassis_type == CHASSIS_TYPE_OMNI && robot->omni);
+    assert(robot->chassis_motor_count == 4U);
+    assert(robot->gimbal_motor_count == 2U);
+    assert(robot->shooter_motor_count == 0U);
+    assert(robot->total_motor_count == 6U);
+    assert(!logical_id_used[6] && !logical_id_used[7] && !logical_id_used[9]);
+    for (uint8_t i = 0; i < robot->total_motor_count; ++i) {
+        assert(robot->motor_configs[i].role != MOTOR_ROLE_SHOOTER_FEED);
+        assert(robot->motor_configs[i].role != MOTOR_ROLE_SHOOTER_FRICTION);
+    }
     assert(robot->omni->configured);
     const uint8_t wheel_ids[4] = {2, 1, 4, 3};
     for (unsigned i = 0; i < 4; ++i) {

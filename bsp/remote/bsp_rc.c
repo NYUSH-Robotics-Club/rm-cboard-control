@@ -4,6 +4,41 @@
 #include "main.h"
 #include <string.h>
 extern UART_HandleTypeDef huart3;
+extern UART_HandleTypeDef huart6;
+static uint8_t vtm_byte, vtm_ring[256];
+static volatile uint8_t vtm_head, vtm_tail;
+static volatile uint8_t vtm_started;
+
+void BspRc_VtmInit(void)
+{
+    vtm_started = 1;
+    (void)HAL_UART_Receive_IT(&huart6, &vtm_byte, 1);
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
+{
+    if (uart != &huart6 || !vtm_started) return;
+    uint8_t next = (uint8_t)(vtm_head + 1U);
+    if (next != vtm_tail) {
+        vtm_ring[vtm_head] = vtm_byte;
+        __DMB();
+        vtm_head = next;
+    }
+    (void)HAL_UART_Receive_IT(uart, &vtm_byte, 1);
+}
+
+int BspRc_VtmReadByte(void)
+{
+    if (vtm_started && huart6.RxState == HAL_UART_STATE_READY)
+        (void)HAL_UART_Receive_IT(&huart6, &vtm_byte, 1);
+    uint8_t tail = vtm_tail;
+    if (tail == vtm_head) return -1;
+    __DMB();
+    int byte = vtm_ring[tail];
+    __DMB();
+    vtm_tail = (uint8_t)(tail + 1U);
+    return byte;
+}
 void BspRc_UpstreamRxEvent(UART_HandleTypeDef *, uint16_t);
 void BspRc_UpstreamError(UART_HandleTypeDef *);
 static BspRcFrameCallback s_frame_callback;
@@ -40,6 +75,12 @@ void BspRc_OnRxEvent(uint16_t length)
 }
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
 {
+    if (uart == &huart6 && vtm_started) {
+        /* HAL may have ended the reception after an overrun. */
+        if (uart->RxState == HAL_UART_STATE_READY)
+            (void)HAL_UART_Receive_IT(uart, &vtm_byte, 1);
+        return;
+    }
     if (uart != &huart3) return;
     s_diagnostics.uart_errors++;
     s_diagnostics.last_uart_error = uart->ErrorCode;
