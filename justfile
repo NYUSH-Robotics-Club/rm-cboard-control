@@ -15,8 +15,12 @@ flash *args:
 connect *args:
     python3 tools/diagnosis/manage.py connect {{args}}
 
-interface mode="Debug":
-    python3 tools/diagnosis/interface.py --elf build/{{mode}}/CBoard_Diagnosis.elf
+interface:
+    python3 tools/diagnosis/interface.py
 
 demo:
     python3 tools/diagnosis/interface.py --demo
+
+# A raw bidirectional RTT terminal; commands include explicit request tokens.
+terminal:
+    python3 tools/diagnosis/terminal.py

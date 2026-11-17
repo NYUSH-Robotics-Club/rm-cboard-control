@@ -18,8 +18,12 @@ target_sources(${PROJECT_NAME} PRIVATE
     runtime/diagnosis/main.c
     bsp/diagnosis/diagnosis_can.c
     services/diagnosis/diagnosis.c
+    services/diagnosis/diagnosis_terminal.c
+    bsp/diagnosis/diagnosis_rtt.c
+    third_party/SEGGER/RTT/SEGGER_RTT.c
 )
-target_include_directories(${PROJECT_NAME} PRIVATE core/diagnosis bsp/diagnosis services/diagnosis)
+target_include_directories(${PROJECT_NAME} PRIVATE core/diagnosis bsp/diagnosis services/diagnosis
+    third_party/SEGGER/RTT third_party/SEGGER/Config)
 target_compile_options(${PROJECT_NAME} PRIVATE -Wextra -Werror)
 target_link_libraries(${PROJECT_NAME} stm32cubemx)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD

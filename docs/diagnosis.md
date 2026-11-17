@@ -1,12 +1,14 @@
 # C 板 ↔ 达妙 CAN 诊断
 
 电脑用 ST-Link/SWD 连接 C 板，C 板通过自身 CAN 收发器连接电机。
-电脑和 C 板之间没有额外 USB CDC/串口要求。ST-Link 本身不提供 CAN 接口。
+电脑和 C 板之间使用 RTT 通道 0 双向文本流，没有额外 USB CDC/串口要求。
+ST-Link 本身不提供 CAN 接口；固件收到终端命令后处理 CAN 并推送事件。
 
 ## 接线与第一次连接
 
 1. ST-Link 的 SWDIO、SWCLK、GND、目标电压参考按 C 板丝印接到调试口。
    C 板与电机各自使用适配的电源；不要依赖调试器给电机供电。
+   ST-Link 读到 MCU 的约 3.3 V 不代表 C 板 CAN 收发器已完整供电。
 2. C 板所选 CAN 口的 H 接电机 CAN_H，L 接 CAN_L，信号地共地。
    使用板上的 CAN 插座，不把 MCU 的 PD0/PD1 或 PB5/PB6 逻辑引脚直接接总线。
    插头线序以两端丝印/手册为准，不按线色猜测。电机调试串口不是 CAN 口。
@@ -50,7 +52,7 @@ python3 tools/diagnosis/manage.py flash --serial 实际STLink序列号
 ```
 
 只有一个可识别的 ST-Link 时可省略 `--serial`；多个探针必须指定。
-选择 Release 烧录时加 `--mode Release`，界面也必须使用匹配的 Release ELF。
+选择 Release 烧录时加 `--mode Release`，连接 OpenOCD 时也必须加 `--mode Release` 以定位匹配 ELF 的 RTT 控制块。
 可以用 `--openocd /完整路径/openocd` 指定程序；不要同时开着 CubeIDE 的调试会话。
 
 烧录完成后，在两个终端分别执行：
@@ -61,21 +63,28 @@ python3 tools/diagnosis/manage.py connect --serial 实际STLink序列号
 ```
 
 ```sh
-# 终端 B：保持运行，读取对应 ELF 的 SRAM 符号
-python3 tools/diagnosis/interface.py --elf build/Debug/CBoard_Diagnosis.elf
+# 终端 B：网页后端只消费 RTT 字节流
+python3 tools/diagnosis/interface.py
 ```
 
 浏览器打开 [本地诊断界面](http://127.0.0.1:8765)。可分别用 `just connect` 和
 `just interface` 代替。目标若已暂停，需要操作者在调试器中明确恢复；工具不代为恢复。
-自定义 TCP 端口时，两侧 `--tcl-port` 必须相同；网页端口可用 `--port` 更改。
-主机启动时 ABI 不匹配会拒绝读取/写入。断连后重启连接和网页进程，不自动重试命令。
+自定义 RTT 端口时，两侧 `--rtt-port` 必须相同；网页端口可用 `--port` 更改。
+RTT hello 校验协议版本 2。断连后重启连接和网页进程，不自动重试命令。
+若系统 USB 元数据为空但 OpenOCD 能连接，确认只有一个物理探针后，可给
+flash/connect 显式加 `--probe-first`；多个探针时必须明确指定序列号。
+
+要直接使用终端，先停止网页后端，再运行 `just terminal`。输入 `hello 1`、
+`status 2`、`config 3 1 1000000 1`、`read 4 1 1 7`，每行一条，等待对应 token
+回复后再发下一条。CAN 接收/发送事件会独立推送。完整命令见架构文档。
 
 先不接硬件看界面：`python3 tools/diagnosis/interface.py --demo`，或 `just demo`。
 演示所有操作都是模拟，不证明 ST-Link 或 CAN 正常。
 
 ## 排查顺序
 
-1. **电脑 → C 板**：网页显示真实固件心跳持续变化。停住时先检查供电、SWD、
+1. **电脑 → C 板**：通过 RTT `hello` 和 `status` 收到回复；网页「查询状态」可更新 MCU 时间。
+   固件无定时上报，闲置时不以时间不变判断掉线。无回复先检查供电、SWD、
    固件是否运行、是否被 IDE 暂停。蓝灯约每 500 ms 翻转也可辅助判断。
 2. **C 板内部**：选择通道、1 Mbps、内部静默回环，应用配置。发送例如标准 ID
    `0x123`、数据 `01 02 03 04`，应看到 TX_QUEUED、TX_OK 和同内容 RX。
@@ -105,13 +114,13 @@ python3 tools/diagnosis/interface.py --elf build/Debug/CBoard_Diagnosis.elf
 
 | 现象 | 可定位的范围 |
 | --- | --- |
-| ABI 不匹配 / 无心跳 | ELF、板上固件、暂停状态或 SWD 链路 |
+| RTT hello/status 无回复 | RTT 控制块/协议版本、板上固件、暂停状态或 SWD 链路 |
 | TX_QUEUED 无 TX_OK | 只有邮箱接收成功，继续看 TX_ERROR/TX_TIMEOUT |
 | TX_ERROR，LEC=3 | ACK 错误；检查电机供电、线路、波特率、正常模式 |
 | TX_OK，无电机回复 | 已有节点 ACK；核对电机 ID/模式、参数协议和反馈格式 |
 | TX_TIMEOUT 后 BUSY | 取消尚未被硬件确认，禁止追加或重新配置；先检查硬件状态 |
 | Bus-off / Error passive | TEC/REC/ESR 异常；排除根因后显式重新应用配置 |
-| rx_dropped 或 MCU→主机遗漏增加 | FIFO/软件队列或 SWD 记录窗口跟不上，不能声称没有收到报文 |
+| rx_dropped 或 MCU→主机遗漏增加 | FIFO/软件队列或 RTT 缓冲跟不上，不能声称没有收到报文 |
 
 ESR 的 LEC 为最近错误码，不是累计错误；`last_tx_tsr` 锁存最后发送结果，
 TSR 当前值与 RF0R 也可查看。`rx_callbacks` 是接收回调次数，不等于帧数。
@@ -124,6 +133,7 @@ TSR 当前值与 RF0R 也可查看。`rx_callbacks` 是接收回调次数，不�
 ## 验证边界
 
 主机测试包括服务请求校验、一次执行、环覆盖、HAL 替身下的正常/失败/超时/取消
-竞争/溢出，以及网页鉴权、只读报文编码和不连接硬件的 OpenOCD 烧录失败路径。
+竞争/溢出，RTT 分段/超长/错误命令/背压，主机 RTT TCP 收发与缓存，以及网页鉴权、
+只读报文编码和不连接硬件的 OpenOCD 烧录失败路径。
 构建、主机模拟、网页演示均不代表已烧录或实机通过。实板接线、CAN 电气层、
 J3507 回复及运动行为须单独验证。

@@ -27,8 +27,8 @@ def read_register(motor_id, register):
     motor_id, register = number(motor_id), number(register)
     if not 0 <= motor_id <= 0x7ff or not 0 <= register <= 255:
         raise ValueError('Motor ID / register out of range')
-    # J3507 manual: parameter reads use ID 0x7FF and exactly four data bytes.
-    return 0x7ff, struct.pack('<HBB', motor_id, 0x33, register), 0
+    # Match the vendor SDK's padded eight-byte reads, verified on this J3507.
+    return 0x7ff, struct.pack('<HBBI', motor_id, 0x33, register, 0), 0
 
 
 def decode_event(words):

@@ -1,7 +1,7 @@
 """Local ST-Link/CAN diagnostic interface. Python standard library only.
 
-OpenOCD owns the probe. This client only reads/writes the live SRAM ABI; it
-never halts, resets, flashes, resumes, or writes peripheral registers.
+OpenOCD owns the probe and exposes RTT channel 0 as a bidirectional TCP stream.
+This client never reads/writes target memory or halts/resets/flashes the board.
 """
 import argparse
 import collections
@@ -22,152 +22,157 @@ except ImportError:
     import protocol as p
 
 
-class TclMemory:
-    def __init__(self, port, address):
-        self.sock = socket.create_connection(('127.0.0.1', port), timeout=3)
-        self.address = address
-
-    def command(self, command):
-        self.sock.sendall(command.encode('ascii') + b'\x1a')
-        data = bytearray()
-        while not data.endswith(b'\x1a'):
-            chunk = self.sock.recv(65536)
-            if not chunk:
-                raise RuntimeError('OpenOCD disconnected; restart the interface after reconnecting')
-            data.extend(chunk)
-        response = data[:-1].decode()
-        if response.startswith('ERROR:'):
-            raise RuntimeError(response[6:])
-        return response
-
-    def read(self, word, count):
-        addr = self.address + word * 4
-        response = self.command(f'if {{[catch {{read_memory {addr} 32 {count}}} result]}} {{set result "ERROR:$result"}}; set result')
-        values = [int(v, 0) for v in response.split()]
-        if len(values) != count:
-            raise RuntimeError('Incomplete OpenOCD memory read')
-        return values
-
-    def write(self, word, values):
-        data = ' '.join(str(int(v)) for v in values)
-        self.command(f'if {{[catch {{write_memory {self.address + word * 4} 32 {{{data}}}}} result]}} {{set result "ERROR:$result"}}; set result')
-
-    def close(self):
-        self.sock.close()
-
-
 def elf_address(elf, nm):
     output = subprocess.check_output([nm, '-n', str(elf)], text=True)
     found = [int(row.split()[0], 16) for row in output.splitlines()
-             if len(row.split()) == 3 and row.split()[2] == 'g_diagnosis']
-    if len(found) != 1 or not 0x20000000 <= found[0] < 0x20020000 - p.WORDS * 4:
-        raise ValueError('ELF has no valid g_diagnosis SRAM symbol')
+             if len(row.split()) == 3 and row.split()[2] == '_SEGGER_RTT']
+    if len(found) != 1 or not 0x20000000 <= found[0] < 0x20020000:
+        raise ValueError('ELF has no valid _SEGGER_RTT SRAM symbol')
     return found[0]
 
 
 class Board:
-    def __init__(self, memory):
-        self.memory = memory
-        self.cursor = 0
-        self.previous_ms = None
-        self.events = collections.deque(maxlen=1000)
-        self.lost = 0
+    """An event stream over RTT channel 0; never reads target memory directly."""
+    def __init__(self, port=9090):
+        self.sock = socket.create_connection(('127.0.0.1', port), timeout=3)
+        self.sock.settimeout(.2)
+        self.condition = threading.Condition()
         self.lock = threading.RLock()
-        self.snapshot()
+        self.events = collections.deque(maxlen=1000)
+        self.replies = {}
+        self.latest = None
+        self.error = None
+        self.closed = False
+        self.token = secrets.randbelow(0x40000000) + 1
+        self.received_at = time.monotonic()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
+        try:
+            hello = self.request('hello')
+            if hello.get('protocol') != 2:
+                raise RuntimeError('RTT protocol mismatch: flash the matching firmware')
+            self.request('status')
+        except Exception:
+            self.close()
+            raise
 
-    def snapshot(self):
-        for _ in range(30):
-            words = self.memory.read(0, 48)
-            if words[:3] != [p.MAGIC, p.ABI, p.WORDS * 4]:
-                raise RuntimeError('Firmware ABI mismatch: flash the matching Diagnosis ELF first')
-            if words[3] & 1:
-                time.sleep(0.001)
-                continue
-            if self.memory.read(3, 1)[0] == words[3]:
-                return words
-        raise RuntimeError('No stable snapshot; target may be halted or SWD too slow')
+    def _read(self):
+        buffer = bytearray()
+        try:
+            while not self.closed:
+                try:
+                    data = self.sock.recv(8192)
+                except socket.timeout:
+                    continue
+                if not data:
+                    raise RuntimeError('RTT disconnected; reconnect without blindly retrying commands')
+                buffer.extend(data)
+                if len(buffer) > 65536:
+                    raise RuntimeError('Invalid RTT record length')
+                while b'\n' in buffer:
+                    raw, _, remaining = buffer.partition(b'\n')
+                    buffer = bytearray(remaining)
+                    record = json.loads(raw)
+                    with self.condition:
+                        self.received_at = time.monotonic()
+                        kind = record.get('type')
+                        if kind == 'event':
+                            words = record['words']
+                            if len(words) != 10 or any(type(v) is not int or not 0 <= v <= 0xffffffff for v in words):
+                                raise ValueError('Malformed RTT CAN event')
+                            self.events.append(p.decode_event(words))
+                        elif kind in ('reply', 'status', 'hello'):
+                            if kind == 'status':
+                                if record.get('protocol') != 2 or len(record['bus']) != 2 or any(len(b) != 16 for b in record['bus']):
+                                    raise ValueError('Malformed RTT status')
+                                if self.latest and record['uptime_ms'] < self.latest['uptime_ms']:
+                                    self.events.clear()
+                                self.latest = record
+                            self.replies[record['token']] = record
+                            # Bound unsolicited replies from manual terminal users.
+                            while len(self.replies) > 32:
+                                self.replies.pop(next(iter(self.replies)))
+                        self.condition.notify_all()
+        except Exception as exc:
+            with self.condition:
+                self.error = str(exc)
+                self.condition.notify_all()
+
+    def request(self, command, *args):
+        with self.lock:
+            self.token = (self.token + 1) & 0xffffffff or 1
+            token = self.token
+            text = ' '.join(map(str, (command, token, *args))) + '\n'
+            if len(text) > 255 or any(c in text[:-1] for c in '\r\n\0'):
+                raise ValueError('Invalid RTT command')
+            with self.condition:
+                if self.error:
+                    raise RuntimeError(self.error)
+                self.sock.sendall(text.encode('ascii'))
+                deadline = time.monotonic() + 3
+                while token not in self.replies:
+                    if self.error:
+                        raise RuntimeError(self.error)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError('No RTT reply; do not retry a motor command blindly')
+                    self.condition.wait(remaining)
+                result = self.replies.pop(token)
+                code = result.get('result', 0)
+                if code:
+                    raise RuntimeError(p.RESULTS[code] if code < len(p.RESULTS) else 'unknown firmware error')
+                return result
 
     def state(self):
-        with self.lock:
-            words = self.snapshot()
-            if self.previous_ms is not None and (words[4] < self.previous_ms or words[6] < self.cursor):
-                self.events.clear()
-                self.cursor = 0
-                self.lost = 0
-            self.previous_ms = words[4]
-            head = words[6]
-            self.lost += max(0, head - self.cursor - 128)
-            start = max(self.cursor + 1, head - 127)
-            if start <= head:
-                # Copy the ring once. A second head read proves no slot in the
-                # selected range was overwritten while SWD copied its payload.
-                ring = self.memory.read(64, 1280)
-                after = self.memory.read(6, 1)[0]
-                for seq in range(start, head + 1):
-                    slot = (seq - 1) % 128 * 10
-                    event = ring[slot:slot + 10]
-                    # The oldest slot can already be invalidated by the next
-                    # write before event_head advances. Recheck its commit word.
-                    at_risk = after - seq == 127
-                    valid_commit = not at_risk or self.memory.read(64 + slot, 1)[0] == seq
-                    if after < head or after - seq >= 128 or event[0] != seq or not valid_commit:
-                        self.lost += 1
-                    else:
-                        self.events.append(p.decode_event(event))
-                self.cursor = head
-            buses = [dict(zip(p.BUS_FIELDS, words[16+i*16:32+i*16])) for i in range(2)]
+        with self.condition:
+            if self.error:
+                raise RuntimeError(self.error)
+            words = self.latest
+            buses = [dict(zip(p.BUS_FIELDS, b)) for b in words['bus']]
             for bus in buses:
                 esr = bus['esr']
                 bus.update(tec=(esr >> 16) & 255, rec=(esr >> 24) & 255,
                            lec=(esr >> 4) & 7, bus_off=bool(esr & 4), passive=bool(esr & 2))
-            return dict(demo=False, uptime_ms=words[4], loops=words[5], ack=words[7],
-                        result=p.RESULTS[words[8]] if words[8] < len(p.RESULTS) else 'unknown',
-                        buses=buses, events=list(self.events), lost=self.lost)
-
-    def request(self, op, channel, arg0=0, arg1=0, can_id=0, flags=0, payload=b''):
-        if channel not in (1, 2):
-            raise ValueError('CAN channel must be 1 or 2')
-        with self.lock:
-            words = self.snapshot()
-            # Reconnects never overwrite a command already committed by another
-            # host. Exactly one host owns this mailbox at a time.
-            old = self.memory.read(48, 1)[0]
-            if old != words[7]:
-                raise RuntimeError('Previous request still pending; is the target running?')
-            seq = (old + 1) & 0xffffffff or 1
-            low, high = struct.unpack('<II', payload.ljust(8, b'\0'))
-            self.memory.write(49, [op, channel, arg0, arg1, can_id, flags, len(payload), low, high] + [0] * 6)
-            self.memory.write(48, [seq])
-            deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
-                words = self.snapshot()
-                if words[7] == seq:
-                    if words[8]:
-                        raise RuntimeError(p.RESULTS[words[8]])
-                    return dict(token=seq, result='accepted; inspect TX_OK / TX_ERROR and motor reply separately')
-                time.sleep(.01)
-            raise TimeoutError('No firmware acknowledgement; do not retry blindly. Read status first.')
+            return dict(demo=False, transport='RTT', uptime_ms=words['uptime_ms'], loops=words['loops'],
+                        status_age_s=round(time.monotonic()-self.received_at, 2),
+                        ack=words['token'], result='RTT connected', buses=buses,
+                        events=list(self.events), lost=words['rtt_dropped'])
 
     def action(self, body):
         kind = body['action']
         channel = p.number(body.get('channel', 1))
-        if kind == 'configure':
-            bitrate, mode = p.number(body['bitrate']), p.number(body['mode'])
-            if bitrate not in (125000, 200000, 250000, 500000, 1000000) or mode not in (0, 1, 2):
-                raise ValueError('Unsupported bitrate or mode')
-            return self.request(1, channel, bitrate, mode)
-        if kind == 'read':
-            can_id, payload, flags = p.read_register(body['motor_id'], body['register'])
-        elif kind == 'raw':
-            if body.get('acknowledge') is not True:
-                raise ValueError('Confirm that raw frames can move or reconfigure the motor')
-            can_id, payload, flags = p.frame(body['id'], body['data'], body.get('flags', 0))
-        elif kind == 'disable':
-            # Use an explicitly supplied mode-specific command ID; do not guess.
-            can_id, payload, flags = p.frame(body['id'], bytes([255]*7 + [253]))
-        else:
-            raise ValueError('Unknown action')
-        return self.request(2, channel, can_id=can_id, flags=flags, payload=payload)
+        if channel not in (1, 2):
+            raise ValueError('CAN channel must be 1 or 2')
+        with self.lock:
+            if kind == 'status':
+                response = self.request('status')
+            elif kind == 'configure':
+                bitrate, mode = p.number(body['bitrate']), p.number(body['mode'])
+                if bitrate not in (125000, 200000, 250000, 500000, 1000000) or mode not in (0, 1, 2):
+                    raise ValueError('Unsupported bitrate or mode')
+                response = self.request('config', channel, bitrate, mode)
+            elif kind == 'read':
+                p.read_register(body['motor_id'], body['register'])
+                response = self.request('read', channel, p.number(body['motor_id']), p.number(body['register']))
+            else:
+                if kind == 'raw':
+                    if body.get('acknowledge') is not True:
+                        raise ValueError('Confirm that raw frames can move or reconfigure the motor')
+                    can_id, payload, flags = p.frame(body['id'], body['data'], body.get('flags', 0))
+                elif kind == 'disable':
+                    can_id, payload, flags = p.frame(body['id'], bytes([255]*7+[253]))
+                else:
+                    raise ValueError('Unknown action')
+                response = self.request('send', channel, can_id, flags, payload.hex() or '-')
+            if kind != 'status':
+                self.request('status')
+            return dict(token=response['token'], result='RTT command accepted; inspect CAN completion and reply separately')
+
+    def close(self):
+        self.closed = True
+        self.sock.close()
+        if threading.current_thread() is not self.reader:
+            self.reader.join(timeout=1)
 
 
 class DemoBoard:
@@ -242,20 +247,15 @@ def make_handler(board, token):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--elf', type=Path)
-    parser.add_argument('--nm', default='arm-none-eabi-nm')
-    parser.add_argument('--tcl-port', type=int, default=6666)
+    parser.add_argument('--rtt-port', type=int, default=9090)
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--demo', action='store_true')
     args = parser.parse_args()
-    memory = None
+    live_board = None
     if args.demo:
         board = DemoBoard()
     else:
-        if not args.elf:
-            parser.error('--elf is required unless --demo is selected')
-        memory = TclMemory(args.tcl_port, elf_address(args.elf, args.nm))
-        board = Board(memory)
+        board = live_board = Board(args.rtt_port)
     server = ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(board, secrets.token_hex(24)))
     print(f'Diagnosis: http://127.0.0.1:{server.server_port}' + (' [DEMO]' if args.demo else ''), flush=True)
     try:
@@ -264,8 +264,8 @@ def main():
         pass
     finally:
         server.server_close()
-        if memory:
-            memory.close()
+        if live_board:
+            live_board.close()
 
 
 if __name__ == '__main__':

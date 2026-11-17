@@ -12,9 +12,9 @@ enum { DIAG_SILENT, DIAG_NORMAL, DIAG_LOOPBACK };
 enum { DIAG_RX = 1, DIAG_TX_QUEUED, DIAG_TX_OK, DIAG_TX_ERROR, DIAG_TX_TIMEOUT };
 enum { DIAG_EXTENDED = 1, DIAG_REMOTE = 2 };
 
-/* Fixed little-endian SWD ABI: every field is one aligned 32-bit word.
- * Only the host writes request; it writes seq LAST after all arguments.
- * Only the main loop writes status/events. IRQ records use a private BSP queue.
+/* Internal engine/debugger state, not the host transport. The RTT terminal
+ * exclusively owns request; the engine owns status/events. IRQ records use
+ * a private BSP queue. Bus/event word order is serialized by RTT protocol v2.
  */
 typedef struct {
     uint32_t seq, ms, kind, channel, id, flags, length, data[2], token;
@@ -34,8 +34,8 @@ typedef struct {
     DiagnosisRequest request;
     DiagnosisEvent events[DIAG_EVENT_COUNT];
 } DiagnosisShared;
-_Static_assert(sizeof(DiagnosisBus) == 64, "SWD bus ABI");
-_Static_assert(sizeof(DiagnosisEvent) == 40, "SWD event ABI");
+_Static_assert(sizeof(DiagnosisBus) == 64, "RTT bus word order");
+_Static_assert(sizeof(DiagnosisEvent) == 40, "RTT event word order");
 _Static_assert(offsetof(DiagnosisShared, request) == 192, "SWD request ABI");
 _Static_assert(offsetof(DiagnosisShared, events) == 256, "SWD events ABI");
 #endif

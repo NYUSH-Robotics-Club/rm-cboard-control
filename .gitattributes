@@ -57,3 +57,6 @@ Makefile text eol=lf
 *.ico binary
 *.svd binary
 
+# Preserve the checksummed upstream RTT files verbatim, including whitespace.
+third_party/SEGGER/RTT/* -whitespace
+

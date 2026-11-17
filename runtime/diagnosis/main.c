@@ -2,6 +2,7 @@
 #include "gpio.h"
 #include "can.h"
 #include "diagnosis.h"
+#include "diagnosis_terminal.h"
 
 /* Same 72 MHz SYSCLK / 36 MHz APB1 tree as the frozen CubeMX main. Keeping
  * this composition root separate avoids changing the generated baseline.
@@ -37,17 +38,16 @@ int main(void)
     MX_CAN1_Init();
     MX_CAN2_Init();
     Diagnosis_Init();
+    DiagnosisTerminal_Init();
     uint32_t last_led = 0;
     for (;;) {
         uint32_t now = HAL_GetTick();
-        Diagnosis_Step(now);
+        DiagnosisTerminal_Step(now);
         if ((uint32_t)(now - last_led) >= 500U) {
             last_led = now;
             HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_10);
         }
-        /* Short delay between seqlock publications gives SWD a stable read
-         * window while CAN callbacks continue to drain hardware FIFOs.
-         */
+        /* CAN reception is interrupt driven; RTT input/output is nonblocking. */
         HAL_Delay(1);
     }
 }
