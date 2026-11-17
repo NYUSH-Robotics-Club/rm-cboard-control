@@ -32,6 +32,6 @@ python3 tools/diagnosis/interface.py --demo
 产物为 `build/Debug/CBoard_Diagnosis.elf` 和 `.bin`。
 实机接入与明确烧录命令见使用说明。
 
-可复用的 [电机 CAN 调试 skill](skills/motor-can-debug/SKILL.md) 同时整理了本分支 RTT
-链路和电脑直连达妙 USB-CAN 的方法、证据判定与停止流程。将此目录安装或链接到
-个人 Codex skills 目录后，可通过 `$motor-can-debug` 调用；它不会自动启动电机。
+可复用的 [电机 CAN 调试 skill](https://github.com/NYUSH-Robotics-Club/motor-can-debug)
+已拆为独立公开仓库，同时整理本分支 RTT 链路和电脑直连达妙 USB-CAN 的方法、
+证据判定与停止流程。安装方法见该仓库，可通过 `$motor-can-debug` 调用。
