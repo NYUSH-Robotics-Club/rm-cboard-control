@@ -21,6 +21,7 @@
 ## 观测与接口
 
 - [VR 手柄、虚拟串口与原版图传遥控](guides/vr-teleop.md)
+- [VR 经官方 MQTT 与 VT03/VT13 遥控](guides/vr-mqtt.md)
 
 - [启动顺序](guides/boot-sequence.md)
 - [RTT 和串口日志](guides/logger-guide.md)、[云台监控](gimbal-monitor.md)

@@ -19,15 +19,21 @@ def crc(data, state, poly):
     return state
 
 
-def pack(seq, enabled, forward, right=0, diagnostic=False):
+def pack_payload(seq, enabled, forward, right=0, diagnostic=False):
     if max(abs(forward), abs(right)) > 100 or (not enabled and (forward or right)):
         raise ValueError("invalid translation command")
     if diagnostic and (enabled or forward or right):
         raise ValueError("diagnostic frames must be neutral")
-    payload = struct.pack("<4sHBBhh18x", b"VRD2", seq & 65535, enabled,
-                          diagnostic, forward, right)
+    return struct.pack("<4sHBBhh18x", b"VRD2", seq & 65535, enabled,
+                       diagnostic, forward, right)
+
+
+def pack(seq, enabled, forward, right=0, diagnostic=False, command=0x0302):
+    if command not in (0x0302, 0x0311):
+        raise ValueError("unsupported transport command")
+    payload = pack_payload(seq, enabled, forward, right, diagnostic)
     header = struct.pack("<BHB", 0xA5, len(payload), seq & 255)
-    frame = header + bytes([crc(header, 0xFF, 0x8C)]) + b"\x02\x03" + payload
+    frame = header + bytes([crc(header, 0xFF, 0x8C)]) + struct.pack("<H", command) + payload
     return frame + struct.pack("<H", crc(frame, 0xFFFF, 0x8408))
 
 

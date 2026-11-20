@@ -25,6 +25,10 @@ set(CMAKE_PROJECT_NAME NYUSH_Infantry)
 # (Override from CLI or VS Code task with -DROBOT_TYPE=...)
 # ------------------------------------------------------------
 set(ROBOT_TYPE "infantry_standard" CACHE STRING "Robot configuration type")
+set(VR_VTM_UART_BAUD "115200" CACHE STRING "VTM UART rate: VT02=115200, VT03=921600")
+if(NOT VR_VTM_UART_BAUD MATCHES "^(115200|921600)$")
+    message(FATAL_ERROR "VR_VTM_UART_BAUD must be 115200 or 921600")
+endif()
 
 # Optional: show available values in GUIs (ccmake/cmake-gui)
 set_property(CACHE ROBOT_TYPE PROPERTY STRINGS
@@ -197,6 +201,7 @@ target_include_directories(bsp PRIVATE
     bsp/remote/nyush_port
 )
 target_link_libraries(bsp PUBLIC stm32cubemx)
+target_compile_definitions(bsp PRIVATE VR_VTM_UART_BAUD=${VR_VTM_UART_BAUD}U)
 target_compile_options(bsp PUBLIC -mthumb)
 
 # The message center gets its short critical section from BSP instead of

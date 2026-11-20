@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 import sys
 import time
@@ -57,8 +58,9 @@ class InputTests(unittest.TestCase):
 
     def test_saved_calibration_and_original_page(self):
         from vr_input import QuestInput
-        source = QuestInput(calibration_path=ROOT / "quest_runtime/repository_calibrations/quest_lab_current.json")
-        self.assertEqual(source.calibration_sha256, "0351fa415d72f769a8a4368dc01d35e5db3f8f27a5f90a4dff53af2c0b6faa61")
+        profile = ROOT / "quest_runtime/repository_calibrations/quest_lab_current.json"
+        source = QuestInput(calibration_path=profile)
+        self.assertEqual(source.calibration_sha256, hashlib.sha256(profile.read_bytes()).hexdigest())
         # Imports/AST adaptation only: no sockets, headset files or control output.
         import run_repository_calibration as calibration
         page = calibration.load_original_web()

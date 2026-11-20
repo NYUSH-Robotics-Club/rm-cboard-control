@@ -9,4 +9,4 @@ SETTINGS = json.loads(_file.read_text(encoding="utf-8-sig"))
 STOCK_ROOT = Path(SETTINGS["stock_client_root"])
 RUNTIME_ROOT = VR_ROOT / "runtime"
 RUNTIME_ROOT.mkdir(exist_ok=True)
-PROFILE = VR_ROOT / "quest_runtime/repository_calibrations/quest_lab_current.json"
+PROFILE = Path(SETTINGS.get("calibration_path", VR_ROOT / "quest_runtime/repository_calibrations/quest_lab_current.json"))

@@ -1,0 +1,47 @@
+{
+  "robot": "infantry_standard",
+  "vtm_uart_baud": 921600,
+  "accepted_commands": [
+    "0x0302",
+    "0x0311"
+  ],
+  "files": {
+    "NYUSH_Infantry.elf": {
+      "sha256": "a7650a15e894c9cdc182c4259defcb75df313f9834a86e820c89b6749292f2a5",
+      "bytes": 2269996
+    },
+    "NYUSH_Infantry.hex": {
+      "sha256": "820a831f53da653336079543fc40f643cb3268987f2307e153290e624403fb7f",
+      "bytes": 483837
+    },
+    "NYUSH_Infantry.map": {
+      "sha256": "686f2398724684f6987c39bef74103ecf38336ac0c5cf12a56f83c31523a8dc9",
+      "bytes": 1569982
+    },
+    "NYUSH_Infantry.bin": {
+      "sha256": "6d35393bb3499ad616d20bdd60fad56d5b6fe76fb23417d63546f3f7ad3f156b",
+      "bytes": 171996
+    }
+  },
+  "source_sha256": {
+    "CMakeLists.txt": "573969e2b109153e6af53d6e130707f8e776c2fad720318b7e8b728366d26439",
+    "bsp/remote/bsp_rc.c": "025acfa4a67267e746e89249ffbc8911734627b7d990888454d123a8ca531abb",
+    "bsp/remote/bsp_rc.h": "f802cf240c0b065f2c58b3db438fb9472ac867444e073c8d0238edb79e59532d",
+    "bsp/remote/vtm_dma_cursor.h": "a349338f808308309978d0b65e908bbc4d320b3255b42357c2fda36a8320ca32",
+    "modules/remote/remote_control.c": "447256e793d4affdf0a7010daad349bf4c6796d36b7a3126622875b42f77310f",
+    "application/cmd/command_router.c": "eb9c7c86e96943b3fb30976e057cc66f0d1eb2235231930aaf533019d834232f",
+    "application/chassis/chassis_controller.c": "35e50a9198f6b07bb2567983d21951b7e433d510e4ca970829a1f692d5cbebe8",
+    "application/gimbal/gimbal_controller.c": "d61601d7b32a4700ea1cfb26df0549cb3411c05fd55c0a03a3be9130d0fec3ec",
+    "config/robots/infantry_standard.c": "e3190a4cf1c81055c3ccadeaa1ed5294c808e09cd48252365907190b7652a092"
+  },
+  "flash_record": {
+    "backup_sha256": "f4ae8fab037e271c054395e24b9787b5b590ac4450eb4d6e582f86e53733b6de",
+    "new_elf_sha256": "a7650a15e894c9cdc182c4259defcb75df313f9834a86e820c89b6749292f2a5",
+    "created_at": "2026-11-20T20:00:36.173804+08:00",
+    "backup_bytes": 1048576,
+    "openocd": "/usr/bin/openocd",
+    "flash_exit": 0,
+    "flashed_at": "2026-11-20T20:21:26.402464+08:00",
+    "previous_elf_sha256": "2be1b6adab58c146b308b66317a6af7d6fbcc8d36d383aa4a48cf0248d1de351"
+  }
+}

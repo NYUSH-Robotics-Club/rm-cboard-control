@@ -26,6 +26,12 @@ static uint32_t vr_last_ms;
 volatile uint32_t vr_uart_valid_count;
 volatile uint32_t vr_uart_publish_count;
 volatile uint32_t vr_uart_last_axes;
+volatile uint32_t vr_uart_mqtt_count;
+volatile uint32_t vr_uart_legacy_count;
+volatile uint32_t vr_uart_last_command;
+volatile uint32_t vr_uart_last_sequence;
+volatile uint32_t vr_uart_last_valid_ms;
+const volatile uint32_t vr_mqtt_firmware_tag = 0x20261120U;
 
 static uint16_t vr_crc(const uint8_t *data, uint8_t size, uint16_t value, uint16_t poly)
 {
@@ -49,6 +55,11 @@ static void vr_accept(uint32_t now_ms)
         right < -VR_FORWARD_MAX || right > VR_FORWARD_MAX ||
         (!p[6] && (forward != 0 || right != 0))) return;
     ++vr_uart_valid_count;
+    vr_uart_last_command = (uint16_t)vr_frame[5] | ((uint16_t)vr_frame[6] << 8);
+    vr_uart_mqtt_count += vr_uart_last_command == 0x0311U;
+    vr_uart_legacy_count += vr_uart_last_command == 0x0302U;
+    vr_uart_last_sequence = seq;
+    vr_uart_last_valid_ms = now_ms;
     if (p[7]) return; /* Diagnostic-only frames never publish a control message. */
     if (dbus_seen && (uint32_t)(now_ms - last_dbus_ms) <= VR_RC_TIMEOUT_MS) {
         vr_seen = 0U;
@@ -87,7 +98,7 @@ static void vr_poll(uint32_t now_ms)
         vr_frame[vr_len++] = (uint8_t)byte;
         if (vr_len == 7U &&
             (vr_frame[1] != 30U || vr_frame[2] != 0U ||
-             vr_frame[5] != 2U || vr_frame[6] != 3U ||
+             (vr_frame[5] != 2U && vr_frame[5] != 0x11U) || vr_frame[6] != 3U ||
              vr_crc(vr_frame, 4, 0xFF, 0x8C) != vr_frame[4])) {
             uint8_t i = 1;
             while (i < vr_len && vr_frame[i] != 0xA5U) ++i;
@@ -133,6 +144,7 @@ static void poll_receiver(void *user)
 }
 void remote_control_init(void)
 {
+    (void)vr_mqtt_firmware_tag;
     BspRc_SetFrameCallback(on_frame);
     s_daemon_tick_ms = BspTime_NowMs();
     /* Upstream RobotInit excludes IRQs until instance and daemon pointers exist. */

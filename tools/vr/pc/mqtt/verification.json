@@ -1,0 +1,90 @@
+{
+  "verified_at": "2026-11-20T20:30:30.940082+08:00",
+  "transport": "FrankaBot -> official MQTT CustomControl -> VT13 RF VT03 -> C-board UART1 / 0x0311",
+  "official_client_version": "12.0.0.213",
+  "mqtt": {
+    "host": "127.0.0.1",
+    "port": 3333,
+    "client_id": "1",
+    "topic": "CustomControl",
+    "qos": 0,
+    "retain": false,
+    "rate_hz": 20
+  },
+  "firmware_elf_sha256": "a7650a15e894c9cdc182c4259defcb75df313f9834a86e820c89b6749292f2a5",
+  "firmware_programmed_and_verified": true,
+  "original_controller_source_preserved": true,
+  "calibration": {
+    "sha256": "3e7f196ccd75fc55cb764e2a1c1c9962e7a39c618a54fa0b9aa0e96cb3406a08",
+    "capture_angle_deg": 85.14570645474856
+  },
+  "checks": {
+    "python_tests": 9,
+    "c_receiver_checks": 34,
+    "full_host_regression": "passed",
+    "arm_builds": [
+      "infantry_standard",
+      "sentry_swerve"
+    ]
+  },
+  "diagnostic": {
+    "sent": 50,
+    "received": 50,
+    "last_sequence": 16102,
+    "control_publish_attempts": 0,
+    "uart_errors": 0,
+    "buffer_overwrites": 0
+  },
+  "live_observation": {
+    "pc_samples": 2956,
+    "board_samples": 113,
+    "nonzero_board_samples": 24,
+    "matching_axes_within_two_sequence_steps": 24,
+    "non_atomic_swd_snapshot": true,
+    "direction_examples": {
+      "right": {
+        "forward": 18,
+        "right": 34,
+        "vr_uart_last_sequence": 24769,
+        "vr_uart_mqtt_count": 3670
+      },
+      "forward": {
+        "forward": 35,
+        "right": -14,
+        "vr_uart_last_sequence": 24795,
+        "vr_uart_mqtt_count": 3696
+      },
+      "left": {
+        "forward": -16,
+        "right": -66,
+        "vr_uart_last_sequence": 24864,
+        "vr_uart_mqtt_count": 3765
+      },
+      "backward": {
+        "forward": -100,
+        "right": 7,
+        "vr_uart_last_sequence": 25140,
+        "vr_uart_mqtt_count": 4041
+      }
+    },
+    "last_board": {
+      "vr_uart_mqtt_count": 6561,
+      "vr_uart_publish_count": 6511,
+      "forward": 0,
+      "right": 0,
+      "vr_uart_errors": 0,
+      "vr_uart_ring_overflows": 0
+    }
+  },
+  "user_confirmation": "Completed controller operation; vehicle movement normal.",
+  "command_path_uses_ssh": false,
+  "limitations": [
+    "MQTT/socket completion is not a motor execution ACK.",
+    "No quantitative latency, stopping-distance, loaded endurance, or competition approval claim.",
+    "SWD is read-only observation; counters are non-atomic and publish counts are attempts."
+  ],
+  "official_binaries_unchanged": {
+    "all_match": true,
+    "checked_files": 7
+  }
+}

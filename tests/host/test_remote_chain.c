@@ -22,6 +22,12 @@ UART_HandleTypeDef huart3 = { .Instance=&test_uart, .hdmarx=&hdma_usart3_rx };
 /* USART6 model is independent from the existing USART3 DMA model. */
 static TestUart test_vtm_uart;
 UART_HandleTypeDef huart6 = { .Instance=&test_vtm_uart, .RxState=HAL_UART_STATE_READY };
+HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *uart)
+{
+    assert(uart == &huart6);
+    assert(uart->Init.BaudRate == 115200U || uart->Init.BaudRate == 921600U);
+    return HAL_OK;
+}
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *uart, uint8_t *buffer, uint16_t size)
 {
     assert(uart == &huart6 && size == 1);
@@ -106,6 +112,13 @@ int main(void)
     MsgCenter_Init(queue,32);
     CmdController_Init();
     remote_control_init();
+    /* Model ORE with no pending byte: recovery must clear it before rearming,
+     * rather than spinning forever in the UART6 error callback. */
+    test_vtm_uart.SR = UART_FLAG_ORE;
+    huart6.ErrorCode = UART_FLAG_ORE;
+    huart6.RxState = HAL_UART_STATE_READY;
+    HAL_UART_ErrorCallback(&huart6);
+    assert(test_vtm_uart.SR == 0U && huart6.RxState == HAL_UART_STATE_BUSY_RX);
     MsgCenter_Subscribe(TOPIC_CHASSIS_CMD,on_command,0);
     MsgCenter_Subscribe(TOPIC_GIMBAL_CMD,on_command,0);
     CmdController_Task(0);

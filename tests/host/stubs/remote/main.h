@@ -5,7 +5,7 @@
 typedef struct { volatile uint32_t SR, DR, CR3; } TestUart;
 typedef struct { volatile uint32_t CR, NDTR; } TestDma;
 typedef struct { TestDma *Instance; } DMA_HandleTypeDef;
-typedef struct { TestUart *Instance; uint32_t ErrorCode; DMA_HandleTypeDef *hdmarx; uint8_t *pRxBuffPtr; uint32_t gState; uint32_t RxState; } UART_HandleTypeDef;
+typedef struct { TestUart *Instance; uint32_t ErrorCode; DMA_HandleTypeDef *hdmarx; uint8_t *pRxBuffPtr; uint32_t gState; uint32_t RxState; struct { uint32_t BaudRate; } Init; } UART_HandleTypeDef;
 typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
 extern TestUart test_uart;
 #define USART3 (&test_uart)
@@ -16,6 +16,7 @@ extern TestUart test_uart;
 #define HAL_UART_STATE_BUSY_RX 0x22U
 #define __DMB() ((void)0)
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *, uint8_t *, uint16_t);
+HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *);
 #define USART3_IRQn 0
 #define DMA1_Stream1_IRQn 1
 #define UART_FLAG_PE 1U
@@ -32,6 +33,7 @@ HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *, uint8_t *, uint16_t)
 #define DMA_IT_HT 16U
 #define CLEAR_BIT(reg, bits) ((reg) &= ~(bits))
 #define __HAL_UART_CLEAR_PEFLAG(h) ((h)->Instance->SR = 0)
+#define __HAL_UART_CLEAR_OREFLAG(h) ((h)->Instance->SR = 0)
 #define __HAL_DMA_DISABLE_IT(h, flag) ((void)(h), (void)(flag))
 #define __HAL_UART_ENABLE_IT(h, flag) ((void)(h), (void)(flag))
 uint32_t NVIC_GetEnableIRQ(int irq);

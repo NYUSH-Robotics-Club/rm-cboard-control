@@ -240,4 +240,7 @@ python3 "$repo_root/tests/host/test_vision_cboard_link.py"
   "$repo_root/application/gimbal/pitch_control_math.c" "$repo_root/tests/host/test_pitch_control_math.c" \
   -lm -o "$test_build/test_pitch_control_math"
 "$test_build/test_pitch_control_math"
+"$cc" $common_flags -I"$repo_root/bsp/remote" \
+  "$repo_root/tests/host/test_vtm_dma_cursor.c" -o "$test_build/test_vtm_dma_cursor"
+"$test_build/test_vtm_dma_cursor"
 echo "host tests: PASS"

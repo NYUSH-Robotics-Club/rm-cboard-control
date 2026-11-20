@@ -16,7 +16,7 @@ const volatile BspRcDiagnostics *BspRc_GetDiagnostics(void);
 void BspRc_SetFrameCallback(BspRcFrameCallback callback);
 /* USART3 branch of the shared HAL RxEvent callback. Length is in bytes. */
 void BspRc_OnRxEvent(uint16_t length);
-/* VT02 UART input, independent of the existing USART3 receiver. */
+/* VT02/VT03 UART input, independent of the existing USART3 DBUS receiver. */
 void BspRc_VtmInit(void);
 int BspRc_VtmReadByte(void);
 

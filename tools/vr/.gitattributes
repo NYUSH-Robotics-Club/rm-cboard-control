@@ -1,3 +1,5 @@
 # Preserve the deployed artifacts byte for byte; the map is a generated snapshot.
 firmware/* -text
 firmware/*.map binary
+firmware/** -text
+firmware/**/*.map binary
