@@ -1,0 +1,537 @@
+/*
+ * 实现当前 STM32 板卡的 CAN 启动、收发和诊断。
+ * 滤波器分区沿用现有固件设置，不在业务模块里散布 HAL 调用。
+ */
+#include "bsp_can.h"
+#include "main.h"
+#include "bsp_critical.h"
+
+#include <string.h>
+
+extern CAN_HandleTypeDef hcan1;
+extern CAN_HandleTypeDef hcan2;
+
+static BspCanRecovery s_recovery[2];
+static bool s_started[2];
+static bool s_outputs_armed;
+static bool s_healthy_seen;
+static uint32_t s_healthy_since_ms;
+static uint8_t s_abort_pending;
+/* Hardware mailbox ownership, task-context only. Payloads remain in CAN_Manager;
+ * this table prevents duplicate IDs from occupying multiple mailboxes. */
+static struct {
+    uint16_t id;
+    bool active, nonzero, abort_requested;
+    uint32_t generated_ms, deadline_ms, abort_ms, abort_timeout_ms;
+} s_tx[2][3];
+
+static BspCanDeadlineDiagnostics s_deadline_diag[2];
+static void service_deadlines(unsigned index, uint32_t now);
+
+#define CAN_RECOVERY_STEP_TIMEOUT_MS 20U
+#define CAN_RECOVERY_RETRY_MS 1000U
+#define CAN_RECOVERY_STABLE_MS 500U
+#define CAN_ALL_MAILBOXES (CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2)
+
+static CAN_HandleTypeDef *handle_for(BspCanChannel channel)
+{
+    if (channel == BSP_CAN_CHANNEL_1) {
+        return &hcan1;
+    }
+    if (channel == BSP_CAN_CHANNEL_2) {
+        return &hcan2;
+    }
+    return NULL;
+}
+
+#define TRACE_CAPACITY 256U
+static struct {
+    uint32_t channel, tx_id, rx_id, slot, sequence, command_seq, lost;
+    uint32_t head, tail;
+    MotorTraceEvent ring[TRACE_CAPACITY];
+    uint32_t mailbox_seq[3];
+    bool mailbox_active[3];
+} s_trace;
+
+static uint32_t trace_push_at(uint32_t ms, uint32_t kind, int32_t raw, uint32_t detail)
+{
+    BspCriticalState lock = BspCritical_Enter();
+    uint32_t seq = ++s_trace.sequence;
+    if (s_trace.head - s_trace.tail == TRACE_CAPACITY) {
+        ++s_trace.tail;
+        ++s_trace.lost;
+    }
+    s_trace.ring[s_trace.head++ % TRACE_CAPACITY] =
+        (MotorTraceEvent){ms, seq, kind, raw, detail};
+    BspCritical_Exit(lock);
+    return seq;
+}
+
+static uint32_t trace_push(uint32_t kind, int32_t raw, uint32_t detail)
+{
+    return trace_push_at(HAL_GetTick(), kind, raw, detail);
+}
+
+/* Protocol decoding belongs to the caller; preserve its receive timestamp. */
+void BspCan_TraceFeedback(BspCanChannel channel, uint16_t rx_id,
+                          uint32_t ms, int32_t raw, uint32_t detail)
+{
+    if (s_trace.channel == (uint32_t)channel && s_trace.rx_id == rx_id)
+        trace_push_at(ms, MOTOR_TRACE_FEEDBACK, raw, detail);
+}
+
+void BspCan_TraceConfigure(BspCanChannel channel, uint16_t tx_id, uint16_t rx_id, uint8_t slot)
+{
+    if (!handle_for(channel) || slot >= 4U) return;
+    memset(&s_trace, 0, sizeof(s_trace));
+    s_trace.channel = channel; s_trace.tx_id = tx_id;
+    s_trace.rx_id = rx_id; s_trace.slot = slot;
+}
+
+void BspCan_TraceCommand(BspCanChannel channel, uint16_t tx_id, uint8_t slot, int16_t raw)
+{
+    if (s_trace.channel == (uint32_t)channel && s_trace.tx_id == tx_id && s_trace.slot == slot)
+        s_trace.command_seq = trace_push(MOTOR_TRACE_COMMAND, raw, 0U);
+}
+
+/* TX IRQ remains disabled. Observe RQCP/TXOK/ALST/TERR before HAL reuses an
+ * empty mailbox (reuse invalidates its old result). Never clear or alter TSR here.
+ * A completion without a retained result is UNKNOWN, never assumed successful. */
+static void trace_poll(BspCanChannel channel)
+{
+    if (s_trace.channel != (uint32_t)channel) return;
+    uint32_t tsr = handle_for(channel)->Instance->TSR;
+    for (unsigned i = 0U; i < 3U; ++i) {
+        if (!s_trace.mailbox_active[i]) continue;
+        uint32_t bits = (tsr >> (8U * i)) & 15U;
+        if ((bits & 1U) == 0U && (tsr & (1UL << (26U + i))) == 0U) continue;
+        uint32_t kind = MOTOR_TRACE_TX_UNKNOWN;
+        if (bits & 1U) {
+            if (bits & 2U) kind = MOTOR_TRACE_TX_OK;
+            else if (bits & 4U) kind = MOTOR_TRACE_TX_ARB_LOST;
+            else if (bits & 8U) kind = MOTOR_TRACE_TX_ERROR;
+        }
+        trace_push(kind | ((i + 1U) << 8), (int32_t)tsr, s_trace.mailbox_seq[i]);
+        s_trace.mailbox_active[i] = false;
+    }
+}
+
+void BspCan_TraceRead(MotorTraceBatch *batch)
+{
+    memset(batch, 0, sizeof(*batch));
+    if (!s_trace.channel) return;
+    trace_poll((BspCanChannel)s_trace.channel);
+    batch->channel = s_trace.channel; batch->tx_id = s_trace.tx_id;
+    batch->rx_id = s_trace.rx_id; batch->slot = s_trace.slot;
+    /* Bound interrupt masking to one event, not a whole telemetry packet. */
+    for (unsigned i = 0U; i < MOTOR_TRACE_BATCH; ++i) {
+        BspCriticalState lock = BspCritical_Enter();
+        if (s_trace.tail == s_trace.head) { BspCritical_Exit(lock); break; }
+        batch->events[batch->count++] = s_trace.ring[s_trace.tail++ % TRACE_CAPACITY];
+        BspCritical_Exit(lock);
+    }
+    batch->lost = s_trace.lost;
+    CAN_HandleTypeDef *handle = handle_for((BspCanChannel)s_trace.channel);
+    batch->esr = handle->Instance->ESR;
+    batch->tsr = handle->Instance->TSR;
+    batch->hal_error = HAL_CAN_GetError(handle);
+    batch->free_mailboxes = HAL_CAN_GetTxMailboxesFreeLevel(handle);
+}
+
+bool BspCan_Start(BspCanChannel channel)
+{
+    CAN_HandleTypeDef *handle = handle_for(channel);
+    if (!handle || !handle->Instance) {
+        return false;
+    }
+
+    CAN_FilterTypeDef filter = {0};
+    filter.FilterBank = channel == BSP_CAN_CHANNEL_1 ? 0U : 14U;
+    /* Both controllers share CAN2SB: preserve CAN1 banks when starting CAN2. */
+    filter.SlaveStartFilterBank = 14U;
+    filter.FilterActivation = ENABLE;
+    filter.FilterMode = CAN_FILTERMODE_IDMASK;
+    filter.FilterScale = CAN_FILTERSCALE_32BIT;
+    filter.FilterFIFOAssignment = CAN_FILTER_FIFO0;
+    filter.FilterIdHigh = 0U;
+    filter.FilterIdLow = 0U;
+    filter.FilterMaskIdHigh = 0U;
+    filter.FilterMaskIdLow = 0U;
+
+    if (HAL_CAN_ConfigFilter(handle, &filter) != HAL_OK) {
+        return false;
+    }
+    if (HAL_CAN_Start(handle) != HAL_OK) {
+        return false;
+    }
+    if (HAL_CAN_ActivateNotification(handle, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK) {
+        return false;
+    }
+    unsigned index = (unsigned)channel - 1U;
+    memset(&s_recovery[index], 0, sizeof(s_recovery[index]));
+    memset(s_tx[index], 0, sizeof(s_tx[index]));
+    memset(&s_deadline_diag[index], 0, sizeof(s_deadline_diag[index]));
+    s_started[index] = true;
+    s_outputs_armed = false;
+    s_healthy_seen = false;
+    return true;
+}
+
+/* Abort both buses so an old command on the healthy bus cannot survive the stop. */
+static void latch_bus_fault(unsigned index, uint32_t now_ms)
+{
+    BspCanRecovery *state = &s_recovery[index];
+    CAN_HandleTypeDef *handle = handle_for((BspCanChannel)(index + 1U));
+    if (state->phase != 0U) return;
+    state->phase = 1U;
+    state->phase_since_ms = now_ms;
+    state->fault_count++;
+    state->first_fault_esr = handle->Instance->ESR;
+    s_outputs_armed = false;
+    s_healthy_seen = false;
+    for (unsigned i = 0U; i < 2U; ++i) {
+        if (s_started[i]) {
+            s_abort_pending |= (uint8_t)(1U << i);
+            (void)HAL_CAN_AbortTxRequest(handle_for((BspCanChannel)(i + 1U)), CAN_ALL_MAILBOXES);
+        }
+    }
+}
+
+static void deadline_event(unsigned bus, unsigned kind, uint16_t id, unsigned slot,
+                           uint32_t generated, uint32_t age) {
+    BspCanDeadlineDiagnostics *d = &s_deadline_diag[bus];
+    d->last_id=id; d->last_slot=slot; d->last_generated_ms=generated;
+    d->last_event=kind; ++d->event_sequence;
+    /* Diagnostic event detail identifies its own bus/ID/slot, independent of yaw trace. */
+    trace_push(kind, (int32_t)age, ((bus+1U)<<24) | ((uint32_t)id<<8) | slot);
+}
+const BspCanDeadlineDiagnostics *BspCan_GetDeadlineDiagnostics(BspCanChannel channel) {
+    return channel >= BSP_CAN_CHANNEL_1 && channel <= BSP_CAN_CHANNEL_2
+        ? &s_deadline_diag[(unsigned)channel-1U] : NULL;
+}
+void BspCan_ReportExpiredSlot(BspCanChannel channel, uint16_t id, uint8_t slot, uint32_t generated) {
+    if (!BspCan_GetDeadlineDiagnostics(channel)) return;
+    unsigned b=(unsigned)channel-1U;
+    ++s_deadline_diag[b].software_expired;
+    deadline_event(b,10U,id,slot,generated,HAL_GetTick()-generated);
+}
+static void service_deadlines(unsigned b, uint32_t now) {
+    CAN_HandleTypeDef *h=handle_for((BspCanChannel)(b+1U));
+    BspCanDeadlineDiagnostics *d=&s_deadline_diag[b];
+    /* Sample completion before asking for cancellation; TXOK and abort may race. */
+    trace_poll((BspCanChannel)(b+1U));
+    for(unsigned m=0;m<3;m++) {
+        if(!s_tx[b][m].active) continue;
+        uint32_t age=now-s_tx[b][m].generated_ms;
+        if(age>d->max_inflight_age_ms)d->max_inflight_age_ms=age;
+        bool pending=HAL_CAN_IsTxMessagePending(h,1UL<<m);
+        if(s_tx[b][m].abort_requested) {
+            uint32_t wait=now-s_tx[b][m].abort_ms;
+            if(wait>d->max_abort_age_ms)d->max_abort_age_ms=wait;
+            if(!pending) {
+                bool sent=(h->Instance->TSR & (2UL << (8U*m)))!=0U;
+                if(sent)++d->abort_raced_txok;else ++d->abort_completed;
+                deadline_event(b,sent?14U:13U,s_tx[b][m].id,m,s_tx[b][m].generated_ms,wait);
+            } else if(wait>=s_tx[b][m].abort_timeout_ms) {
+                ++d->abort_failed;
+                deadline_event(b,15U,s_tx[b][m].id,m,s_tx[b][m].generated_ms,wait);
+                latch_bus_fault(b,now);return;
+            }
+        }
+        if(!pending){s_tx[b][m].active=false;continue;}
+        if(s_tx[b][m].nonzero && !s_tx[b][m].abort_requested &&
+           (int32_t)(now-s_tx[b][m].deadline_ms)>=0) {
+            ++d->inflight_expired;
+            deadline_event(b,11U,s_tx[b][m].id,m,s_tx[b][m].generated_ms,age);
+            if(HAL_CAN_AbortTxRequest(h,1UL<<m)!=HAL_OK) {
+                ++d->abort_failed;deadline_event(b,15U,s_tx[b][m].id,m,s_tx[b][m].generated_ms,age);
+                latch_bus_fault(b,now);return;
+            }
+            s_tx[b][m].abort_requested=true;s_tx[b][m].abort_ms=now;
+            ++d->abort_requests;
+            deadline_event(b,12U,s_tx[b][m].id,m,s_tx[b][m].generated_ms,age);
+        }
+    }
+}
+
+void BspCan_Service(uint32_t now_ms)
+{
+    bool healthy = s_started[0] && s_started[1];
+    for (unsigned i = 0U; i < 2U; ++i) {
+        if (!s_started[i]) continue;
+        CAN_HandleTypeDef *handle = handle_for((BspCanChannel)(i + 1U));
+        if (s_recovery[i].phase == 0U) service_deadlines(i, now_ms);
+        BspCanRecovery *state = &s_recovery[i];
+        uint32_t esr = handle->Instance->ESR;
+        if ((esr & CAN_ESR_LEC) != 0U) state->last_error_esr = esr;
+        if ((esr & CAN_ESR_BOFF) != 0U && state->phase == 0U) latch_bus_fault(i, now_ms);
+        if ((s_abort_pending & (1U << i)) != 0U && HAL_CAN_GetTxMailboxesFreeLevel(handle) == 3U) {
+            s_abort_pending &= (uint8_t)~(1U << i);
+        }
+        uint32_t elapsed = (uint32_t)(now_ms - state->phase_since_ms);
+        switch (state->phase) {
+        case 1U:
+            /* Do not leave a nonzero mailbox pending across reinitialization. */
+            if (HAL_CAN_GetTxMailboxesFreeLevel(handle) == 3U) {
+                SET_BIT(handle->Instance->MCR, CAN_MCR_INRQ);
+                state->phase = 2U;
+                state->phase_since_ms = now_ms;
+            } else if (elapsed >= CAN_RECOVERY_STEP_TIMEOUT_MS) {
+                state->phase = 5U;
+                state->phase_since_ms = now_ms;
+                state->timeout_count++;
+            }
+            break;
+        case 2U:
+            if ((handle->Instance->MSR & CAN_MSR_INAK) != 0U) {
+                /* RM0090: set then clear INRQ with ABOM=0; hardware does bus synchronization. */
+                CLEAR_BIT(handle->Instance->MCR, CAN_MCR_INRQ);
+                state->phase = 3U;
+                state->phase_since_ms = now_ms;
+            } else if (elapsed >= CAN_RECOVERY_STEP_TIMEOUT_MS) {
+                state->phase = 5U;
+                state->phase_since_ms = now_ms;
+                state->timeout_count++;
+            }
+            break;
+        case 3U:
+            if ((handle->Instance->MSR & CAN_MSR_INAK) == 0U) {
+                state->phase = 4U;
+                state->phase_since_ms = now_ms;
+            } else if (elapsed >= CAN_RECOVERY_RETRY_MS) {
+                state->phase = 5U;
+                state->phase_since_ms = now_ms;
+                state->timeout_count++;
+            }
+            break;
+        case 4U:
+            if ((esr & CAN_ESR_BOFF) == 0U) {
+                state->phase = 0U;
+                state->recovery_count++;
+            } else if (elapsed >= CAN_RECOVERY_RETRY_MS) {
+                state->phase = 5U;
+                state->phase_since_ms = now_ms;
+                state->timeout_count++;
+            }
+            break;
+        case 5U:
+            if (elapsed >= CAN_RECOVERY_RETRY_MS) {
+                (void)HAL_CAN_AbortTxRequest(handle, CAN_ALL_MAILBOXES);
+                state->phase = 1U;
+                state->phase_since_ms = now_ms;
+            }
+            break;
+        default:
+            break;
+        }
+        if (state->phase != 0U || (esr & (CAN_ESR_BOFF | CAN_ESR_EPVF | CAN_ESR_EWGF)) != 0U) {
+            healthy = false;
+        }
+    }
+    if (s_abort_pending != 0U) healthy = false;
+    if (!healthy) s_healthy_seen = false;
+    else if (!s_healthy_seen) {
+        s_healthy_seen = true;
+        s_healthy_since_ms = now_ms;
+    }
+}
+
+const BspCanRecovery *BspCan_GetRecovery(BspCanChannel channel)
+{
+    return (channel == BSP_CAN_CHANNEL_1 || channel == BSP_CAN_CHANNEL_2)
+        ? &s_recovery[(unsigned)channel - 1U] : NULL;
+}
+
+bool BspCan_OutputsArmed(void) { return s_outputs_armed; }
+
+bool BspCan_RecoveryReady(uint32_t now_ms)
+{
+    return s_healthy_seen && (uint32_t)(now_ms - s_healthy_since_ms) >= CAN_RECOVERY_STABLE_MS;
+}
+
+bool BspCan_TryArm(uint32_t now_ms)
+{
+    if (!BspCan_RecoveryReady(now_ms)) return false;
+    for (unsigned i = 0U; i < 2U; ++i) {
+        CAN_HandleTypeDef *handle = handle_for((BspCanChannel)(i + 1U));
+        if (s_recovery[i].phase != 0U ||
+            (handle->Instance->ESR & (CAN_ESR_BOFF | CAN_ESR_EPVF | CAN_ESR_EWGF)) != 0U) return false;
+    }
+    s_outputs_armed = true;
+    return true;
+}
+
+bool BspCan_Read(BspCanChannel channel, BspCanFrame *frame)
+{
+    CAN_HandleTypeDef *handle = handle_for(channel);
+    if (!handle || !handle->Instance || !frame) {
+        return false;
+    }
+
+    CAN_RxHeaderTypeDef header;
+    uint8_t data[8] = {0};
+    if (HAL_CAN_GetRxMessage(handle, CAN_RX_FIFO0, &header, data) != HAL_OK) {
+        return false;
+    }
+
+    frame->standard_id = header.StdId;
+    frame->length = header.DLC <= 8U ? (uint8_t)header.DLC : 8U;
+    memcpy(frame->data, data, frame->length);
+    frame->is_standard_frame = header.IDE == CAN_ID_STD;
+    frame->is_data_frame = header.RTR == CAN_RTR_DATA;
+    return true;
+}
+
+static BspCanTxResult write_frame(BspCanChannel channel,
+                  uint16_t standard_id,
+                  const uint8_t *data,
+                  uint8_t length, uint32_t generated_ms, uint32_t deadline_ms,
+                  uint32_t abort_timeout_ms)
+{
+    CAN_HandleTypeDef *handle = handle_for(channel);
+    if (!handle || !handle->Instance || standard_id > 0x7FFU || length > 8U || (length > 0U && !data)) {
+        return BSP_CAN_TX_ERROR;
+    }
+
+    unsigned index = (unsigned)channel - 1U;
+    if (!s_started[index]) return BSP_CAN_TX_ERROR;
+    if (s_recovery[index].phase == 0U) service_deadlines(index, HAL_GetTick());
+    if ((handle->Instance->ESR & CAN_ESR_BOFF) != 0U) {
+        latch_bus_fault(index, HAL_GetTick());
+        return BSP_CAN_TX_ERROR;
+    }
+    if (s_recovery[index].phase != 0U || (s_abort_pending & (1U << index)) != 0U) return BSP_CAN_TX_ERROR;
+    /* No buffered nonzero command may escape while the operator interlock is closed. */
+    if (!s_outputs_armed) {
+        for (uint8_t i = 0U; i < length; ++i) if (data[i] != 0U) return BSP_CAN_TX_ERROR;
+    }
+
+    trace_poll(channel);
+    bool nonzero = false;
+    for (unsigned i = 0U; i < length; ++i) nonzero |= data[i] != 0U;
+    if (nonzero && (int32_t)(HAL_GetTick()-deadline_ms)>=0) return BSP_CAN_TX_ERROR;
+    for (unsigned i = 0U; i < 3U; ++i) {
+        if (!s_tx[index][i].active) continue;
+        uint32_t mailbox_mask = 1UL << i;
+        if (!HAL_CAN_IsTxMessagePending(handle, mailbox_mask)) {
+            s_tx[index][i].active = false;
+            continue;
+        }
+        if (s_tx[index][i].id != standard_id) continue;
+        /* Do not cancel every changing setpoint: hardware retransmission must
+         * be allowed to finish. Full zero output is the stop exception. */
+        if (length == 8U && !nonzero && s_tx[index][i].nonzero &&
+            !s_tx[index][i].abort_requested) {
+            if (HAL_CAN_AbortTxRequest(handle, mailbox_mask) != HAL_OK) {
+                ++s_deadline_diag[index].abort_failed;
+                deadline_event(index,15U,standard_id,i,s_tx[index][i].generated_ms,
+                               HAL_GetTick()-s_tx[index][i].generated_ms);
+                latch_bus_fault(index,HAL_GetTick());
+                return BSP_CAN_TX_ERROR;
+            }
+            s_tx[index][i].abort_requested = true;
+            s_tx[index][i].abort_ms = HAL_GetTick();
+            ++s_deadline_diag[index].abort_requests;
+            deadline_event(index,12U,standard_id,i,s_tx[index][i].generated_ms,
+                           HAL_GetTick()-s_tx[index][i].generated_ms);
+        }
+        return BSP_CAN_TX_BUSY;
+    }
+    if (HAL_CAN_GetTxMailboxesFreeLevel(handle) == 0U) return BSP_CAN_TX_BUSY;
+
+    CAN_TxHeaderTypeDef header = {0};
+    uint8_t frame_data[8] = {0};
+    uint32_t mailbox;
+    header.StdId = standard_id;
+    header.IDE = CAN_ID_STD;
+    header.RTR = CAN_RTR_DATA;
+    header.DLC = length;
+    if (length > 0U) {
+        memcpy(frame_data, data, length);
+    }
+    trace_poll(channel);
+    if (nonzero && (int32_t)(HAL_GetTick()-deadline_ms)>=0) return BSP_CAN_TX_ERROR;
+    bool ok = HAL_CAN_AddTxMessage(handle, &header, frame_data, &mailbox) == HAL_OK;
+    if (ok) {
+        for (unsigned i = 0U; i < 3U; ++i) if (mailbox == (1UL << i)) {
+            s_tx[index][i].id = standard_id;
+            s_tx[index][i].active = true;
+            s_tx[index][i].nonzero = nonzero;
+            s_tx[index][i].abort_requested = false;
+            s_tx[index][i].generated_ms=generated_ms;
+            s_tx[index][i].deadline_ms=deadline_ms;
+            s_tx[index][i].abort_timeout_ms=abort_timeout_ms;
+            uint32_t age=HAL_GetTick()-generated_ms;
+            if(age>s_deadline_diag[index].max_submit_age_ms)s_deadline_diag[index].max_submit_age_ms=age;
+        }
+    }
+    if (ok && s_trace.channel == (uint32_t)channel) {
+        for (unsigned i = 0U; i < 3U; ++i) if (mailbox == (1UL << i)) {
+            uint32_t mailbox_tag = (i + 1U) << 8;
+            /* Completion can race the pre-submit poll, including reuse by a
+             * non-yaw frame. Never attribute that new frame's result to yaw. */
+            if (s_trace.mailbox_active[i]) {
+                trace_push(MOTOR_TRACE_TX_UNKNOWN | mailbox_tag, 0, s_trace.mailbox_seq[i]);
+                s_trace.mailbox_active[i] = false;
+            }
+            if (standard_id == s_trace.tx_id && length == 8U) {
+                unsigned slot = s_trace.slot * 2U;
+                int16_t raw = (int16_t)((uint16_t)data[slot] << 8 | data[slot + 1U]);
+                s_trace.mailbox_seq[i] = trace_push(MOTOR_TRACE_SUBMIT | mailbox_tag, raw, s_trace.command_seq);
+                s_trace.mailbox_active[i] = true;
+            }
+        }
+    }
+    return ok ? BSP_CAN_TX_ACCEPTED : BSP_CAN_TX_ERROR;
+}
+
+BspCanTxResult BspCan_TryWriteDeadline(BspCanChannel channel, uint16_t standard_id,
+    const uint8_t *data, uint8_t length, uint32_t generated_ms, uint32_t deadline_ms,
+    uint32_t abort_timeout_ms)
+{
+    if (!abort_timeout_ms || abort_timeout_ms > 65535U) return BSP_CAN_TX_ERROR;
+    BspCanTxResult result = write_frame(channel, standard_id, data, length,
+                                       generated_ms, deadline_ms, abort_timeout_ms);
+    if (result != BSP_CAN_TX_ACCEPTED && s_trace.channel == (uint32_t)channel &&
+        standard_id == s_trace.tx_id && data && length == 8U) {
+        unsigned slot = s_trace.slot * 2U;
+        int16_t raw = (int16_t)((uint16_t)data[slot] << 8 | data[slot + 1U]);
+        trace_push(result == BSP_CAN_TX_BUSY ? MOTOR_TRACE_DEFER : MOTOR_TRACE_REJECT,
+                   raw, s_trace.command_seq);
+    }
+    return result;
+}
+
+BspCanTxResult BspCan_TryWrite(BspCanChannel channel, uint16_t id, const uint8_t *data, uint8_t length) {
+    uint32_t now=HAL_GetTick();
+    return BspCan_TryWriteDeadline(channel,id,data,length,now,now+20U,20U);
+}
+
+bool BspCan_Write(BspCanChannel channel, uint16_t standard_id, const uint8_t *data, uint8_t length)
+{
+    return BspCan_TryWrite(channel, standard_id, data, length) == BSP_CAN_TX_ACCEPTED;
+}
+
+bool BspCan_MatchesNativeHandle(BspCanChannel channel, const void *native_handle)
+{
+    return native_handle && native_handle == handle_for(channel);
+}
+
+bool BspCan_ReadDiagnostics(BspCanChannel channel, BspCanDiagnostics *diagnostics)
+{
+    if (!diagnostics) {
+        return false;
+    }
+
+    CAN_HandleTypeDef *handle = handle_for(channel);
+    if (!handle || !handle->Instance) {
+        return false;
+    }
+
+    diagnostics->error = HAL_CAN_GetError(handle);
+    diagnostics->error_status_register = handle->Instance->ESR;
+    diagnostics->transmit_status_register = handle->Instance->TSR;
+    diagnostics->receive_fifo0_register = handle->Instance->RF0R;
+    diagnostics->free_tx_mailboxes = HAL_CAN_GetTxMailboxesFreeLevel(handle);
+    return true;
+}

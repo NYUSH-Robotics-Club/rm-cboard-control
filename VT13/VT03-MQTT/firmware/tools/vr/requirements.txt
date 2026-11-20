@@ -1,0 +1,5 @@
+numpy==2.5.4
+pyzmq==27.2.0
+pyserial==3.5
+paho-mqtt==2.1.0
+protobuf==6.33.1

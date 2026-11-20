@@ -1,0 +1,4 @@
+av==19.0.2
+Pillow==13.0.0
+paho-mqtt==2.2.0
+protobuf==7.36.2

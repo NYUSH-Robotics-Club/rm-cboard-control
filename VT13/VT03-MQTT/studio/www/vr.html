@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>双手柄 VR 工作台</title>
+  <script src="/vendor/aframe-1.7.1.min.js"></script>
+  <script src="/shared.js"></script>
+  <script src="/vr.js" defer></script>
+  <style>
+    body { margin: 0; background: #0b1220; color: white; font-family: system-ui; }
+    #hint { position: fixed; z-index: 5; inset: 16px auto auto 20px; max-width: min(500px, calc(100vw - 70px)); background: #122238ee; padding: 16px; border-radius: 10px; }
+    #hint p { margin: 10px 0 0; }
+    #enter-immersive { min-height: 48px; margin-top: 12px; padding: 8px 20px; border: 1px solid #b4d6f6; border-radius: 7px; color: white; background: #28547c; font: inherit; font-weight: 650; cursor: pointer; }
+    #enter-immersive:disabled { opacity: .7; cursor: default; }
+    #panel-canvas { display: none; }
+  </style>
+</head>
+<body>
+<div id="hint">
+  <b>双手柄 VR 工作台</b><br>
+  <button id="enter-immersive" type="button">进入沉浸式 VR</button>
+  <p id="notice" role="status" aria-live="polite">正在准备 VR 场景…</p>
+</div>
+<canvas id="panel-canvas" width="960" height="600"></canvas>
+<a-scene background="color: #0b1220" webxr="referenceSpaceType: local-floor; requiredFeatures: local-floor" renderer="colorManagement: true" xr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
+<a-entity id="panel-root" position="0 0.8 -1.6">
+  <a-plane id="video-panel" position="0 0.85 -0.08" width="1.65" height="0.928" material="shader: flat; side: double"></a-plane>
+  <a-plane id="panel" class="ui-panel" width="1.2" height="0.75" material="shader: flat; transparent: false; side: double"></a-plane>
+  <a-plane id="calibration-button" class="control-button" position="-0.42 0.46 0.02" width="0.38" height="0.12" material="shader: flat"></a-plane>
+  <a-plane id="arm-button" class="control-button" position="0 0.46 0.02" width="0.38" height="0.12" material="shader: flat"></a-plane>
+  <a-plane id="stop-button" class="control-button" position="0.42 0.46 0.02" width="0.38" height="0.12" material="shader: flat"></a-plane>
+</a-entity>
+<a-entity id="camera" camera position="0 1.6 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-entity>
+<a-sphere id="right-pointer" radius="0.012" visible="false" material="shader: flat; color: #a8ffe1"></a-sphere>
+<a-circle rotation="-90 0 0" radius="6" color="#132238"></a-circle><a-entity light="type: ambient; intensity: 1"></a-entity>
+</a-scene></body></html>

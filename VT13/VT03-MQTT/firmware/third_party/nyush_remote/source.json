@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/NYUSH-Robotics-Club/nyush-rm-control",
+  "commit": "2b7ca720e856f1efda9f6de6259faea42654720d",
+  "sha256": {
+    "bsp/usart/bsp_usart.c": "7176202efd3a565d83e567edb45cc8ad86b61ae323852e4a2fc33531db919ca7",
+    "bsp/usart/bsp_usart.h": "f39a5acd152ade6ddf45631699fb8086168c5ba9765e33bf19c18519d988721e",
+    "modules/remote/remote_control.c": "1e4e66cc5ea7368663f71b1a9ed63aa2532b513572e7e80d63a23ae3e09ba9e0",
+    "modules/remote/remote_control.h": "beb498eb1ba2f0159daf29d6cfea67cfa38129461dba260e37fc421878475dd1",
+    "modules/daemon/daemon.c": "7793c2b2d7ffd654c0f2d779522830d41372772880c0ae4fdb8466e08178c3aa",
+    "modules/daemon/daemon.h": "3fe2801552b67a49288fbab44858f20c543316b918c0526b9010e52d7dfb8c26",
+    "modules/algorithm/crc16.c": "67ae6b84c7d09aa58582bae0ed5914fbf67cb5a32b2052a507d03e5163ee7821",
+    "modules/algorithm/crc16.h": "f0b7068d50db5e65c21011fc9be60d611aef0314b82e6bd5c6bc7254c5be90bf",
+    "LICENSE": "47c4b2a98a02ecbf399033453bb8333531a3c2698d1c88f04e3e32abcef022c2"
+  }
+}

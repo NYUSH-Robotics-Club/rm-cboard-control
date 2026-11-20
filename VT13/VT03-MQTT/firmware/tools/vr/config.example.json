@@ -1,0 +1,8 @@
+{
+  "stock_client_root": "D:/RoboMaster/VT02-2025/RoboMasterClient 11.0.1.128/RoboMasterClient",
+  "adb_path": "adb",
+  "quest_serial": "",
+  "writer_port": "COM21",
+  "player_port": 22,
+  "diagnostic_ssh_host": "jetson-1"
+}

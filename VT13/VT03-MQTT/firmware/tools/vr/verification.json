@@ -1,0 +1,56 @@
+{
+  "date_local": "2026-11-18",
+  "timezone": "Asia/Shanghai",
+  "player_version": "11.0.1.128",
+  "virtual_driver": "VSPE 1.5.8.489 x64 evaluation",
+  "writer": "COM21",
+  "player_reader": "COM22",
+  "vt12": "COM11",
+  "local_pair": {
+    "frames": 10,
+    "bytes": 390,
+    "exact_match": true
+  },
+  "before_player_login": {
+    "valid": 0,
+    "published": 0
+  },
+  "after_player_login": [
+    {
+      "sent": 10,
+      "valid_before": 0,
+      "valid_after": 10,
+      "published_after": 0
+    },
+    {
+      "sent": 50,
+      "valid_before": 10,
+      "valid_after": 60,
+      "published_after": 0
+    }
+  ],
+  "test_frame": {
+    "command_id": "0x0302",
+    "payload_schema": "VRD2",
+    "diagnostic": true,
+    "enabled": false,
+    "forward": 0,
+    "right": 0
+  },
+  "receiver_observation": "Read-only OpenOCD mdw via Jetson/ST-Link; no reset, flash, memory write or axis injection",
+  "stock_key_binaries_checked": 6,
+  "stock_key_binaries_unchanged": true,
+  "cboard_firmware_changed_for_virtual_transport": false,
+  "quest_adb_connected_at_test": false,
+  "live_vr_on_virtual_transport_verified": false,
+  "user_confirmation": {
+    "date_local": "2026-11-18",
+    "statement": "用户确认：刚才的配置和代码都能用；硬件已全部拔除，记录归档即可。",
+    "archive_actions": "Only source packaging, offline host checks, builds and Git push; no hardware actions."
+  },
+  "real_quest_input_observed": true,
+  "nonzero_pc_command_observed": {
+    "forward": 52,
+    "right": 85
+  }
+}

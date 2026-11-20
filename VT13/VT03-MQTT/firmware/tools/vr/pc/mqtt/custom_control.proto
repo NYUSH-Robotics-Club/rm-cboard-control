@@ -1,0 +1,7 @@
+syntax = "proto3";
+package robomaster;
+// RoboMaster 2026 communication protocol, CustomControl, section 2.2.2.
+// MQTT publishes this message directly, without a serial A5/CRC wrapper.
+message CustomControl {
+  bytes data = 1;
+}

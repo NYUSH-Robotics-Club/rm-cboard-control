@@ -1,0 +1,7 @@
+{
+  "backup": "evidence/board-before-dual.bin",
+  "elf_sha256": "738cf81e5dc50cd5026b03fc2e954d4aa1c914c1ee13b69ee92ae325011de461",
+  "verified_at": "2026-11-20T22:06:57.1520324+08:00",
+  "dual_tag": "56524433",
+  "flash_verified": true
+}

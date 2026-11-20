@@ -1,0 +1,13 @@
+__pycache__/
+.venv/
+node_modules/
+*.log
+firmware/monitor/logger_*
+studio/data/*
+!studio/data/board-ready.json
+!studio/data/webxr-calibrations/
+studio/data/webxr-calibrations/*
+!studio/data/webxr-calibrations/quest_webxr.json
+studio/evidence/*
+!studio/evidence/board-dual-final.elf
+!studio/evidence/board-final-check.json

@@ -1,0 +1,17 @@
+{
+  "date_local": "2026-11-18",
+  "timezone": "Asia/Shanghai",
+  "python_input_calibration_tests": {"passed": 5},
+  "python_to_actual_c_receiver": {"checks_passed": 17},
+  "full_host_regression": "PASS",
+  "powershell_parse_check": "PASS",
+  "original_calibration_page_import": "PASS",
+  "windows_status_window_smoke_check": "PASS",
+  "arm_builds": {
+    "infantry_standard": {"result": "PASS", "elf_sha256": "5404d22fbb559a62de5c65d0835d0504f51a1b9ab77b3d36ff46ef80cfd772d5", "flash_bytes": 171148, "ram_bytes": 76760},
+    "sentry_swerve": {"result": "PASS", "elf_sha256": "e6a73aaf6c93ea4ace827d93c0533cbb80305533fcb0cf82c07da35808d74b50", "flash_bytes": 172300, "ram_bytes": 76760}
+  },
+  "archived_flashed_elf_sha256": "1e92848bebc5144a3759d70bf01dff111af49e19e0728616b1771a5574b0f3c8",
+  "hardware_actions_during_archiving": [],
+  "note": "Build results are offline validation; they do not replace or re-flash the archived deployed image."
+}

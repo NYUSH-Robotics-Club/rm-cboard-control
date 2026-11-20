@@ -1,0 +1,1 @@
+{"passed": true, "dump_bytes": 1048576, "elf_sha256": "738cf81e5dc50cd5026b03fc2e954d4aa1c914c1ee13b69ee92ae325011de461", "dump_sha256": "ebfac5d496902e195fa16302d2fdb70d04fadb29a18b2ec038ad01eff17ef175", "segments": [{"address": "0x8000000", "bytes": 170908}, {"address": "0x8029b9c", "bytes": 1296}]}
